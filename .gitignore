@@ -13,3 +13,7 @@ ugreen_connect_debug.json
 
 # Session working notes, never part of the component
 .memsearch/
+
+# Local test virtualenv
+.venv/
+.pytest_cache/

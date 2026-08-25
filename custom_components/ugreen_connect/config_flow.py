@@ -31,8 +31,12 @@ from homeassistant.helpers.selector import (
 from .api import UgreenApi, UgreenAuthError, UgreenError
 from .const import (
     CONF_DEBUG_DUMP,
+    CONF_EFFICIENCY,
+    CONF_NOMINAL_VOLTAGE,
     CONF_REGION,
+    DEFAULT_EFFICIENCY,
     DEFAULT_LANGUAGE,
+    DEFAULT_NOMINAL_VOLTAGE,
     DEFAULT_REGION,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -59,6 +63,20 @@ STEP_USER_SCHEMA = vol.Schema(
         ),
         # Off by default: it writes the raw cloud payload, device ids included,
         # next to configuration.yaml on every refresh.
+        vol.Required(
+            CONF_NOMINAL_VOLTAGE, default=DEFAULT_NOMINAL_VOLTAGE
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=1, max=30, step=0.05, unit_of_measurement="V",
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Required(CONF_EFFICIENCY, default=DEFAULT_EFFICIENCY): NumberSelector(
+            NumberSelectorConfig(
+                min=50, max=100, step=1, unit_of_measurement="%",
+                mode=NumberSelectorMode.SLIDER,
+            )
+        ),
         vol.Required(CONF_DEBUG_DUMP, default=False): bool,
     }
 )
@@ -80,6 +98,20 @@ OPTIONS_SCHEMA = vol.Schema(
                 options=list(REGIONS),
                 mode=SelectSelectorMode.DROPDOWN,
                 translation_key="region",
+            )
+        ),
+        vol.Required(
+            CONF_NOMINAL_VOLTAGE, default=DEFAULT_NOMINAL_VOLTAGE
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=1, max=30, step=0.05, unit_of_measurement="V",
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Required(CONF_EFFICIENCY, default=DEFAULT_EFFICIENCY): NumberSelector(
+            NumberSelectorConfig(
+                min=50, max=100, step=1, unit_of_measurement="%",
+                mode=NumberSelectorMode.SLIDER,
             )
         ),
         vol.Required(CONF_DEBUG_DUMP, default=False): bool,
@@ -211,13 +243,21 @@ class UgreenOptionsFlow(OptionsFlow):
                     },
                 )
                 return self.async_create_entry(
-                    data={CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL])}
+                    data={
+                        CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
+                        CONF_NOMINAL_VOLTAGE: float(user_input[CONF_NOMINAL_VOLTAGE]),
+                        CONF_EFFICIENCY: int(user_input[CONF_EFFICIENCY]),
+                    }
                 )
 
         current = {
             CONF_SCAN_INTERVAL: entry.options.get(
                 CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
             ),
+            CONF_NOMINAL_VOLTAGE: entry.options.get(
+                CONF_NOMINAL_VOLTAGE, DEFAULT_NOMINAL_VOLTAGE
+            ),
+            CONF_EFFICIENCY: entry.options.get(CONF_EFFICIENCY, DEFAULT_EFFICIENCY),
             CONF_REGION: entry.data.get(CONF_REGION, DEFAULT_REGION),
             CONF_DEBUG_DUMP: entry.data.get(CONF_DEBUG_DUMP, False),
         }

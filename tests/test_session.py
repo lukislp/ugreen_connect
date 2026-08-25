@@ -1,0 +1,234 @@
+"""Charging-session tracking: what starts a session, what ends it, what it accumulates."""
+
+import pytest
+
+from conftest import session as session_module
+
+SessionTracker = session_module.SessionTracker
+
+KEY = "charger"
+PORT = "c1"
+
+# The charger is polled every few seconds; the tests feed it at that cadence because
+# both the debounce and the gap guard are only meaningful against a real sample rate.
+STEP = 5.0
+
+
+def reading(power, *, voltage=9.1, current=2.0, protocol="PD"):
+    return {
+        PORT: {
+            "voltage": voltage,
+            "current": current,
+            "power": power,
+            "protocol": protocol,
+        }
+    }
+
+
+EMPTY = {PORT: {"voltage": 0.0, "current": 0.0, "power": 0.0, "protocol": "none"}}
+
+
+def feed(tracker, start, seconds, values, step=STEP):
+    """Poll ``tracker`` with the same reading for ``seconds``; return the last timestamp."""
+    stamp = start
+    while stamp <= start + seconds:
+        tracker.update(stamp, KEY, values)
+        stamp += step
+    return stamp - step
+
+
+def test_energy_accumulates_by_trapezoid_while_plugged():
+    tracker = SessionTracker()
+    tracker.update(0.0, KEY, reading(10.0))
+    tracker.update(5.0, KEY, reading(20.0))
+
+    assert tracker.session(KEY, PORT).energy_wh == pytest.approx(15.0 * 5 / 3600)
+
+
+def test_unplugging_ends_the_session_but_keeps_the_number():
+    tracker = SessionTracker()
+    end = feed(tracker, 0.0, 600.0, reading(20.0))
+    feed(tracker, end + STEP, 60.0, EMPTY)
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is False
+    assert state.energy_wh == pytest.approx(20.0 * 600 / 3600)
+
+
+def test_plugging_in_again_starts_from_zero():
+    tracker = SessionTracker()
+    end = feed(tracker, 0.0, 600.0, reading(20.0))
+    end = feed(tracker, end + STEP, 60.0, EMPTY)
+
+    tracker.update(end + STEP, KEY, reading(20.0))
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is True
+    assert state.energy_wh == 0.0
+
+
+def test_brief_protocol_dropout_does_not_end_the_session():
+    """The charger reports "none" for a few seconds mid-renegotiation."""
+    tracker = SessionTracker()
+    end = feed(tracker, 0.0, 600.0, reading(20.0))
+    before = tracker.session(KEY, PORT).energy_wh
+
+    feed(tracker, end + STEP, 10.0, EMPTY)
+    feed(tracker, end + 20.0, 600.0, reading(20.0))
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is True
+    # Two ten-minute stretches at the same power, not a counter restarted at zero.
+    assert state.energy_wh == pytest.approx(before * 2, rel=0.05)
+
+
+def test_reconnecting_with_a_different_protocol_starts_a_new_session():
+    """Swapping a PD phone for a QC gamepad inside the debounce window is not a blip."""
+    tracker = SessionTracker()
+    end = feed(tracker, 0.0, 600.0, reading(20.0))
+
+    feed(tracker, end + STEP, 10.0, EMPTY)
+    tracker.update(end + 20.0, KEY, reading(20.0, protocol="QC"))
+
+    assert tracker.session(KEY, PORT).energy_wh == 0.0
+
+
+def test_a_gap_in_readings_is_not_integrated():
+    """The cloud drops out for minutes at a time; stale power must not fill the hole."""
+    tracker = SessionTracker()
+    tracker.update(0.0, KEY, reading(20.0))
+    tracker.update(5.0, KEY, reading(20.0))
+    tracker.update(305.0, KEY, reading(20.0))
+    tracker.update(310.0, KEY, reading(20.0))
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is True
+    # Only the two observed 5 s intervals: 20 W over 10 s.
+    assert state.energy_wh == pytest.approx(20.0 * 10 / 3600)
+
+
+def test_a_long_poll_interval_still_accumulates():
+    """``max_gap`` follows the configured scan interval, which reaches 900 s."""
+    tracker = SessionTracker(max_gap=1800.0)
+    tracker.update(0.0, KEY, reading(20.0))
+    tracker.update(900.0, KEY, reading(20.0))
+
+    assert tracker.session(KEY, PORT).energy_wh == pytest.approx(20.0 * 900 / 3600)
+
+
+def test_maintenance_trickle_is_not_counted_as_charge():
+    """A full phone left plugged in reads 0.1 A -- the current quantum, not charging.
+
+    Observed on C1: ``power`` sits at 0.9 W for half of every idle poll, which would
+    invent roughly 900 mAh over a night.
+    """
+    tracker = SessionTracker()
+    feed(tracker, 0.0, 3600.0, reading(0.9, current=0.1))
+
+    assert tracker.session(KEY, PORT).energy_wh == 0.0
+
+
+def test_a_small_but_real_draw_is_counted():
+    """The deadband has to stay under anything genuinely taking charge."""
+    tracker = SessionTracker()
+    feed(tracker, 0.0, 3600.0, reading(1.8, current=0.2))
+
+    assert tracker.session(KEY, PORT).energy_wh == pytest.approx(1.8)
+
+
+def test_a_session_records_when_it_ran_and_how_hard():
+    tracker = SessionTracker()
+    tracker.update(100.0, KEY, reading(20.0))
+    end = feed(tracker, 105.0, 600.0, reading(45.0))
+    feed(tracker, end + STEP, 60.0, EMPTY)
+
+    state = tracker.session(KEY, PORT)
+    assert state.started_at == 100.0
+    assert state.peak_w == 45.0
+    # The moment the port actually read empty, not when the debounce expired.
+    assert state.ended_at == end + STEP
+    assert state.duration == pytest.approx(end + STEP - 100.0)
+
+
+def test_an_unfinished_session_measures_up_to_the_last_reading():
+    tracker = SessionTracker()
+    feed(tracker, 100.0, 600.0, reading(20.0))
+
+    state = tracker.session(KEY, PORT)
+    assert state.ended_at is None
+    assert state.duration == pytest.approx(600.0)
+
+
+def test_a_resumed_session_forgets_the_blip_that_looked_like_an_end():
+    tracker = SessionTracker()
+    end = feed(tracker, 0.0, 600.0, reading(20.0))
+    feed(tracker, end + STEP, 10.0, EMPTY)
+    last = feed(tracker, end + 20.0, 600.0, reading(20.0))
+
+    state = tracker.session(KEY, PORT)
+    assert state.ended_at is None
+    assert state.duration == pytest.approx(last)
+
+
+def test_energy_converts_to_an_approximate_battery_charge():
+    """Delivered watt-hours, read back as charge into a nominal 3.85 V cell."""
+    assert session_module.charge_mah(18.5, 3.85, 0.9) == pytest.approx(4324.7, abs=0.5)
+
+
+def test_no_energy_is_no_charge():
+    assert session_module.charge_mah(0.0, 3.85, 0.9) == 0.0
+
+
+def test_a_restored_session_continues_when_the_same_device_is_still_there():
+    """Home Assistant restarts mid-charge; the total on screen should not restart with it."""
+    before = SessionTracker()
+    before.update(100.0, KEY, reading(20.0))
+    before.update(105.0, KEY, reading(20.0))
+    saved = before.session(KEY, PORT).as_dict()
+
+    after = SessionTracker()
+    after.restore(KEY, PORT, saved)
+    after.update(5000.0, KEY, reading(20.0))
+    after.update(5005.0, KEY, reading(20.0))
+
+    state = after.session(KEY, PORT)
+    assert state.started_at == 100.0
+    # The downtime itself is not integrated: only the 5 s observed either side of it.
+    assert state.energy_wh == pytest.approx(20.0 * 10 / 3600)
+
+
+def test_a_restored_session_is_dropped_when_a_different_device_is_there():
+    """The phone was swapped for a gamepad while Home Assistant was down."""
+    tracker = SessionTracker()
+    tracker.restore(
+        KEY, PORT, {"energy_wh": 12.0, "active": True, "protocol": "PD", "started_at": 100.0}
+    )
+    tracker.update(5000.0, KEY, reading(20.0, protocol="QC"))
+
+    state = tracker.session(KEY, PORT)
+    assert state.energy_wh == 0.0
+    assert state.started_at == 5000.0
+
+
+def test_a_restored_session_is_finished_when_the_port_is_empty():
+    """The device was taken off during the downtime: keep the total, stop the session."""
+    tracker = SessionTracker()
+    tracker.restore(
+        KEY, PORT, {"energy_wh": 12.0, "active": True, "protocol": "PD", "started_at": 100.0}
+    )
+    tracker.update(5000.0, KEY, EMPTY)
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is False
+    assert state.energy_wh == pytest.approx(12.0)
+
+
+def test_a_port_with_nothing_on_it_is_not_charging():
+    """A socket nobody has used yet must not read as a session in progress."""
+    tracker = SessionTracker()
+    tracker.update(0.0, KEY, EMPTY)
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is False
+    assert state.started_at is None
+    assert state.ended_at is None

@@ -20,11 +20,13 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MIN_POLL_GAP,
+    SESSION_GAP_FACTOR,
     STATIC_INFO_INTERVAL,
     WALLPAPER_LIST_INTERVAL,
     WALLPAPER_MISS_INTERVAL,
 )
 from .rtcx import QUERY_GET_WIFI_SSID, RtcxClient
+from .session import MAX_GAP, SessionTracker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +60,12 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.api = api
         self.rtcx = rtcx
+        # Readings are only continuous with each other if they keep to the poll
+        # period, so what counts as a hole has to follow the configured interval
+        # rather than a fixed number of seconds.
+        self.sessions = SessionTracker(
+            max_gap=max(MAX_GAP, self._target_period * SESSION_GAP_FACTOR)
+        )
         self._debug_dump = debug_dump
         self._dumped = False
         self._power_errors: dict[str, str] = {}
@@ -147,6 +155,13 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 errors[key] = str(err)
                 power[key] = None
         self._power_errors = errors
+
+        # Only readings that actually arrived are folded in: a failed poll has to
+        # leave every session untouched, or an outage would read as an unplug.
+        stamp = time.time()
+        for key, reading in power.items():
+            if reading:
+                self.sessions.update(stamp, key, reading["ports"])
 
         data = {
             "devices": devices,

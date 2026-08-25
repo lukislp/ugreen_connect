@@ -17,17 +17,29 @@ from homeassistant.components.sensor import (
 from homeassistant.const import (
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
+    UnitOfEnergy,
     UnitOfPower,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util import dt as dt_util
 
 from . import UgreenConfigEntry
-from .const import DOMAIN, HANDSHAKE_PROTOCOL, X783_PORTS
+from .const import (
+    CONF_EFFICIENCY,
+    CONF_NOMINAL_VOLTAGE,
+    DEFAULT_EFFICIENCY,
+    DEFAULT_NOMINAL_VOLTAGE,
+    DOMAIN,
+    HANDSHAKE_PROTOCOL,
+    X783_PORTS,
+)
 from .coordinator import UgreenCoordinator, device_key
 from .entity import ONLINE, UgreenDeviceEntity
+from .session import Session, charge_mah
 
 # The report always carries all eight slots.
 MEASUREMENTS: dict[str, tuple[SensorDeviceClass, str, int]] = {
@@ -100,6 +112,8 @@ async def async_setup_entry(
                     for kind in MEASUREMENTS
                 )
                 new.append(UgreenPortProtocolSensor(coordinator, key, port))
+                new.append(UgreenSessionEnergySensor(coordinator, key, port))
+                new.append(UgreenSessionChargeSensor(coordinator, key, port))
         if new:
             async_add_entities(new)
 
@@ -225,4 +239,141 @@ class UgreenTotalPowerSensor(UgreenDeviceEntity, SensorEntity):
         return {
             "firmware": reading.get("firmware"),
             "ssid": reading.get("ssid"),
+        }
+
+
+class UgreenSessionSensor(UgreenDeviceEntity, SensorEntity):
+    """Shared base for the two views of one port's charging session.
+
+    A session runs from the moment something is plugged into the port until it is
+    taken off again, and the total stays on show afterwards -- so "how much did that
+    get?" is still answerable once the device is gone. Plugging the next thing in
+    starts a new session from zero.
+    """
+
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, coordinator: UgreenCoordinator, key: str, port: str) -> None:
+        super().__init__(coordinator, key)
+        self._port = port
+        self._attr_translation_placeholders = {"port": port}
+
+    @property
+    def _session(self) -> Session | None:
+        return self.coordinator.sessions.session(self._key, self._port)
+
+    @property
+    def available(self) -> bool:
+        # Unlike the live measurements, a finished session is still worth showing
+        # when the cloud is unreachable -- that is the whole point of keeping it.
+        return super().available and self._session is not None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        session = self._session
+        if session is None:
+            return {}
+        return {
+            "charging": session.active,
+            "started": _as_local(session.started_at),
+            "ended": _as_local(session.ended_at),
+            "duration": round(session.duration),
+            "peak_power": round(session.peak_w, 1),
+            "average_power": round(session.average_w, 1),
+            "protocol": session.protocol,
+        }
+
+
+def _as_local(stamp: float | None) -> str | None:
+    return dt_util.utc_from_timestamp(stamp).isoformat() if stamp else None
+
+
+class UgreenSessionEnergySensor(UgreenSessionSensor, RestoreEntity):
+    """Watt-hours this port has delivered to whatever is currently plugged into it.
+
+    This one owns the restore: the tracker's state is shared by both session
+    sensors, so exactly one of them may hand it back after a restart.
+    """
+
+    _attr_translation_key = "session_energy"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.WATT_HOUR
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: UgreenCoordinator, key: str, port: str) -> None:
+        super().__init__(coordinator, key, port)
+        self._attr_unique_id = f"{key}_{port}_session_energy"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_state()) is None:
+            return
+        try:
+            energy = float(last.state)
+        except (TypeError, ValueError):
+            return
+        self.coordinator.sessions.restore(
+            self._key,
+            self._port,
+            {
+                "energy_wh": energy,
+                "active": bool(last.attributes.get("charging")),
+                "protocol": last.attributes.get("protocol") or "none",
+                "started_at": _as_timestamp(last.attributes.get("started")),
+                "ended_at": _as_timestamp(last.attributes.get("ended")),
+                "peak_w": last.attributes.get("peak_power") or 0.0,
+            },
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        session = self._session
+        return round(session.energy_wh, 3) if session else None
+
+
+def _as_timestamp(value: Any) -> float | None:
+    if not value:
+        return None
+    parsed = dt_util.parse_datetime(str(value))
+    return parsed.timestamp() if parsed else None
+
+
+class UgreenSessionChargeSensor(UgreenSessionSensor):
+    """The same session read as charge into a battery rather than energy out of a port.
+
+    An estimate, not a measurement: see ``session.charge_mah`` for what is assumed.
+    """
+
+    _attr_translation_key = "session_charge"
+    _attr_native_unit_of_measurement = "mAh"
+    _attr_icon = "mdi:battery-charging"
+    _attr_suggested_display_precision = 0
+
+    def __init__(self, coordinator: UgreenCoordinator, key: str, port: str) -> None:
+        super().__init__(coordinator, key, port)
+        self._attr_unique_id = f"{key}_{port}_session_charge"
+
+    @property
+    def native_value(self) -> float | None:
+        session = self._session
+        if session is None:
+            return None
+        options = self.coordinator.config_entry.options
+        return round(
+            charge_mah(
+                session.energy_wh,
+                options.get(CONF_NOMINAL_VOLTAGE, DEFAULT_NOMINAL_VOLTAGE),
+                options.get(CONF_EFFICIENCY, DEFAULT_EFFICIENCY) / 100,
+            )
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        options = self.coordinator.config_entry.options
+        return {
+            **super().extra_state_attributes,
+            "nominal_voltage": options.get(
+                CONF_NOMINAL_VOLTAGE, DEFAULT_NOMINAL_VOLTAGE
+            ),
+            "efficiency": options.get(CONF_EFFICIENCY, DEFAULT_EFFICIENCY),
         }

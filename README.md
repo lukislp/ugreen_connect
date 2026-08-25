@@ -53,6 +53,8 @@ e.g. `sensor.ugreen_nexode_pro_x783_c1_power`.
 | `sensor.<device>_c1_power` … `_dc_power` | one per port: C1–C6, A1, DC |
 | `sensor.<device>_c1_voltage`, `_c1_current` | same ports |
 | `sensor.<device>_c1_protocol` | negotiated fast-charge protocol: PD, PPS, QC, AFC, FCP, UFCS, AVS |
+| `sensor.<device>_c1_session_energy` | watt-hours delivered to whatever is plugged into that port now |
+| `sensor.<device>_c1_session_charge` | the same session read as milliamp-hours into a battery |
 | `sensor.<device>_total_power` | sum across ports; firmware and Wi-Fi SSID in its attributes |
 | `sensor.<device>_cloud_status` | `online` / `offline`; MAC in its attributes |
 | `update.<device>_firmware` | installed version, and whether one is waiting |
@@ -80,12 +82,41 @@ Ports are reported in the order `C1 C2 C3 C4 C5 C6 A1 DC`. A port keeps its
 entities once it has been seen, so unplugging a cable does not delete its
 history.
 
+### Charging sessions
+
+A session starts the moment something is plugged into a port and its total stays
+on screen after the device is taken off, so *how much did that get?* is still
+answerable once the phone is back in your pocket. Plugging the next thing in
+starts a new session from zero. Both session sensors carry the same detail in
+their attributes: `charging`, `started`, `ended`, `duration`, `peak_power`,
+`average_power` and `protocol`.
+
+The charger reports no energy total, so this is integrated from the per-port
+wattage, and three things about the device shape how:
+
+- **Watt-hours are the measurement; milliamp-hours are a conversion.** A port may
+  be handing over 5, 9 or 28 V, so the charge that reaches a battery depends on
+  that battery's own voltage — which the charger cannot know. Set it under
+  *Battery voltage* in the options; the 3.85 V default suits phones and earbuds
+  and is meaningless for a laptop.
+- **The cloud drops out for minutes at a time.** An outage leaves a session
+  exactly as it was rather than reading as an unplug, and the missing minutes are
+  not filled in with the last known wattage.
+- **A full device left plugged in still reports 0.1 A**, the measurement quantum
+  rather than charge going anywhere. At 9 V that looks like 0.9 W and would
+  invent close to a whole battery over a night, so readings below 0.15 A are not
+  counted.
+
+Sessions survive a restart of Home Assistant. If the device on the port changed
+while it was down, the old total is dropped rather than added to.
+
 **What the device does not offer.** Its TSL model declares `WiFiRSSI`,
 `errorCode`, `IPAddress` and more, but this charger never populates them — asking
 for those identifiers returns the same four properties it always reports. There
 is no temperature sensor of any kind, and no energy total, so the charger cannot
 feed Home Assistant's Energy dashboard directly (a Riemann-sum helper over
-`total_power` is the usual workaround).
+`total_power` is the usual workaround; the session sensors above measure a
+device's stay on a port, not a running total).
 
 ## The screensaver card
 
@@ -219,12 +250,27 @@ property, which is what makes it download the file.
 | Setting | Default | Notes |
 |---|---|---|
 | Poll every | 5 s | how often a reading arrives, measured start to start; the wait for the charger to answer comes out of it, not on top |
+| Battery voltage | 3.85 V | only used to read a session's watt-hours back as milliamp-hours; a laptop's pack is far higher |
+| Charging efficiency | 90 % | how much of what leaves the port reaches the cell; the rest is heat |
 | Region | as set up | only if the account itself moved servers; the password is re-checked first |
 | Debug snapshot | off | writes the unedited cloud payload to `ugreen_connect_debug.json` |
 
 Five seconds keeps the wattage live enough to watch a laptop charge. It is also
 a lot of traffic against someone else's API, so raise it if you would rather be
 gentle — nothing else depends on the rate.
+
+## Tests
+
+The session rules -- what starts one, what ends it, what a dropout means -- are the
+one part of this with enough edge cases to be worth pinning down, so they live in
+`session.py` with no Home Assistant imports and are tested on their own:
+
+```
+pip install pytest && pytest tests -q
+```
+
+Everything else needs a real charger and a real cloud account to say anything, and
+is checked against both rather than mocked.
 
 ## Translating
 

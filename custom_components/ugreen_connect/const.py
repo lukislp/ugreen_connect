@@ -39,6 +39,22 @@ MIN_SCAN_INTERVAL: Final = 5
 MIN_POLL_GAP: Final = 1.0
 MAX_SCAN_INTERVAL: Final = 900
 
+# --- Charging sessions ------------------------------------------------------
+# Watt-hours are what the charger actually delivers; milliamp-hours are what
+# people think in. Converting between them needs a battery voltage and a
+# conversion loss, neither of which the charger can know, so both are options.
+# 3.85 V is the nominal cell voltage of essentially every phone and earbud; a
+# laptop on USB-PD has a far higher pack voltage, and its milliamp-hour figure
+# is meaningless until this is set to match.
+CONF_NOMINAL_VOLTAGE: Final = "nominal_voltage"
+CONF_EFFICIENCY: Final = "efficiency"
+DEFAULT_NOMINAL_VOLTAGE: Final = 3.85
+DEFAULT_EFFICIENCY: Final = 90
+
+# A reading is only continuous with the one before it if it arrived roughly on
+# schedule; this multiple of the poll period is where "roughly" stops.
+SESSION_GAP_FACTOR: Final = 4
+
 # --- RTCX/Polaris gateway (live telemetry) ---------------------------------
 # The gateway envelope uses an underscore locale, unlike the account API header.
 GATEWAY_LANGUAGE: Final = "en_US"

@@ -24,3 +24,17 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+
+  tests:
+    name: Session logic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # `session.py` carries no Home Assistant imports precisely so its rules can be
+      # exercised without installing one; the tests load it straight from its file and
+      # fail loudly if that ever stops being true.
+      - run: pip install pytest
+      - run: pytest tests -q
