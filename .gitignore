@@ -17,3 +17,6 @@ ugreen_connect_debug.json
 # Local test virtualenv
 .venv/
 .pytest_cache/
+
+# Dashboard mockups for the local instance, not part of the component
+.design/
