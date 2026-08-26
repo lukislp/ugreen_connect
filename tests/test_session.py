@@ -27,6 +27,12 @@ def reading(power, *, voltage=9.1, current=2.0, protocol="PD"):
 
 EMPTY = {PORT: {"voltage": 0.0, "current": 0.0, "power": 0.0, "protocol": "none"}}
 
+# What a port with only a cable in it reports: this charger holds Vbus up and keeps
+# the negotiated contract, so it is indistinguishable from an attached device that
+# happens not to be drawing. Confirmed on C2 against the frame's own occupancy byte,
+# which reads "present" for a bare cable too.
+CABLE = {PORT: {"voltage": 5.1, "current": 0.0, "power": 0.0, "protocol": "PD"}}
+
 
 def feed(tracker, start, seconds, values, step=STEP):
     """Poll ``tracker`` with the same reading for ``seconds``; return the last timestamp."""
@@ -145,9 +151,9 @@ def test_a_session_records_when_it_ran_and_how_hard():
     state = tracker.session(KEY, PORT)
     assert state.started_at == 100.0
     assert state.peak_w == 45.0
-    # The moment the port actually read empty, not when the debounce expired.
-    assert state.ended_at == end + STEP
-    assert state.duration == pytest.approx(end + STEP - 100.0)
+    # The moment charge last flowed, not the poll that noticed the port had emptied.
+    assert state.ended_at == end
+    assert state.duration == pytest.approx(end - 100.0)
 
 
 def test_an_unfinished_session_measures_up_to_the_last_reading():
@@ -188,8 +194,8 @@ def test_a_restored_session_continues_when_the_same_device_is_still_there():
 
     after = SessionTracker()
     after.restore(KEY, PORT, saved)
-    after.update(5000.0, KEY, reading(20.0))
-    after.update(5005.0, KEY, reading(20.0))
+    after.update(225.0, KEY, reading(20.0))
+    after.update(230.0, KEY, reading(20.0))
 
     state = after.session(KEY, PORT)
     assert state.started_at == 100.0
@@ -232,3 +238,144 @@ def test_a_port_with_nothing_on_it_is_not_charging():
     assert state.active is False
     assert state.started_at is None
     assert state.ended_at is None
+
+
+def test_a_port_that_never_reports_empty_still_ends_its_session():
+    """The charger cannot say a device left, so a long quiet has to mean the same."""
+    tracker = SessionTracker(idle_end=1800.0)
+    end = feed(tracker, 0.0, 600.0, reading(20.0))
+
+    feed(tracker, end + STEP, 3600.0, CABLE, step=60.0)
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is False
+    assert state.energy_wh == pytest.approx(20.0 * 600 / 3600, rel=0.01)
+
+
+def test_a_new_bout_after_a_long_quiet_starts_a_new_session():
+    tracker = SessionTracker(idle_end=1800.0)
+    end = feed(tracker, 0.0, 600.0, reading(20.0))
+    end = feed(tracker, end + STEP, 3600.0, CABLE, step=60.0)
+
+    tracker.update(end + 60.0, KEY, reading(20.0))
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is True
+    assert state.energy_wh == 0.0
+
+
+def test_a_short_pause_does_not_split_a_session():
+    """A device that stops drawing for a few minutes has not been swapped."""
+    tracker = SessionTracker(idle_end=1800.0)
+    end = feed(tracker, 0.0, 600.0, reading(20.0))
+    before = tracker.session(KEY, PORT).energy_wh
+
+    end = feed(tracker, end + STEP, 600.0, CABLE)
+    feed(tracker, end + STEP, 600.0, reading(20.0))
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is True
+    assert state.energy_wh == pytest.approx(before * 2, rel=0.05)
+
+
+def test_a_cable_on_its_own_never_starts_a_session():
+    tracker = SessionTracker(idle_end=1800.0)
+    feed(tracker, 0.0, 7200.0, CABLE, step=60.0)
+
+    state = tracker.session(KEY, PORT)
+    assert state.started_at is None
+    assert state.active is False
+    assert state.energy_wh == 0.0
+
+
+def test_duration_measures_the_bout_not_the_quiet_after_it():
+    tracker = SessionTracker(idle_end=1800.0)
+    end = feed(tracker, 0.0, 600.0, reading(20.0))
+
+    feed(tracker, end + STEP, 3600.0, CABLE, step=60.0)
+
+    state = tracker.session(KEY, PORT)
+    assert state.ended_at == end
+    assert state.duration == pytest.approx(600.0)
+
+
+def test_a_cable_blip_does_not_replace_a_finished_session():
+    """A stray 0.3 A that the charger itself calls 0 W must not start a bout.
+
+    Seen on C5 with nothing but a cable in it; without this the blip would wipe the
+    total the previous device left on screen.
+    """
+    tracker = SessionTracker(idle_end=1800.0)
+    end = feed(tracker, 0.0, 600.0, reading(20.0))
+    end = feed(tracker, end + STEP, 3600.0, CABLE, step=60.0)
+    delivered = tracker.session(KEY, PORT).energy_wh
+
+    blip = {PORT: {"voltage": 5.1, "current": 0.3, "power": 0.0, "protocol": "PD"}}
+    feed(tracker, end + 60.0, 10.0, blip)
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is False
+    assert state.energy_wh == pytest.approx(delivered)
+
+
+def test_a_restored_session_is_finished_when_the_downtime_outlasted_the_bout():
+    """Home Assistant was down for hours; whatever was charging is long done."""
+    tracker = SessionTracker()
+    tracker.restore(KEY, PORT, {
+        "energy_wh": 12.0, "active": True, "protocol": "PD",
+        "started_at": 100.0, "last_draw": 700.0,
+    })
+
+    tracker.update(40000.0, KEY, CABLE)
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is False
+    assert state.energy_wh == pytest.approx(12.0)
+    assert state.ended_at == 700.0
+
+
+def test_a_phone_topping_itself_up_stays_one_session():
+    """A phone left on the charger sips every so often; those sips are the same stay.
+
+    Without this a 5 mAh trickle would start a "new session" and the charge that
+    actually went into the phone would vanish off the card. The default window is
+    what this test is about, so it deliberately does not pin one.
+    """
+    tracker = SessionTracker()
+    end = feed(tracker, 0.0, 3600.0, reading(20.0))
+    charged = tracker.session(KEY, PORT).energy_wh
+
+    moment = end
+    for _ in range(3):
+        moment = feed(tracker, moment + STEP, 3000.0, CABLE, step=60.0)
+        moment = feed(tracker, moment + STEP, 30.0, reading(2.5, current=0.5, voltage=5.1))
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is True
+    assert state.started_at == 0.0
+    assert state.energy_wh > charged
+
+
+def test_a_session_restored_without_a_last_draw_still_ends():
+    """Sessions saved before last_draw existed must not be stuck running forever."""
+    tracker = SessionTracker(idle_end=1800.0)
+    tracker.restore(KEY, PORT, {
+        "energy_wh": 90.0, "active": True, "protocol": "PD",
+        "started_at": 0.0, "ended_at": None, "peak_w": 100.0,
+    })
+
+    feed(tracker, 100000.0, 120.0, CABLE)
+
+    state = tracker.session(KEY, PORT)
+    assert state.active is False
+    assert state.energy_wh == pytest.approx(90.0)
+
+
+def test_a_restored_session_that_never_started_has_no_end():
+    tracker = SessionTracker()
+    tracker.restore(KEY, PORT, {
+        "energy_wh": 0.0, "active": False, "protocol": "none",
+        "started_at": None, "ended_at": 500.0,
+    })
+
+    assert tracker.session(KEY, PORT).ended_at is None

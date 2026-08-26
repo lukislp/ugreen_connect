@@ -279,6 +279,7 @@ class UgreenSessionSensor(UgreenDeviceEntity, SensorEntity):
             "ended": _as_local(session.ended_at),
             "duration": round(session.duration),
             "peak_power": round(session.peak_w, 1),
+            "last_draw": _as_local(session.last_draw),
             "average_power": round(session.average_w, 1),
             "protocol": session.protocol,
         }
@@ -322,6 +323,9 @@ class UgreenSessionEnergySensor(UgreenSessionSensor, RestoreEntity):
                 "started_at": _as_timestamp(last.attributes.get("started")),
                 "ended_at": _as_timestamp(last.attributes.get("ended")),
                 "peak_w": last.attributes.get("peak_power") or 0.0,
+                # How long ago charge last flowed is what decides whether a session
+                # survives the downtime, so it has to come back with the rest.
+                "last_draw": _as_timestamp(last.attributes.get("last_draw")),
             },
         )
 

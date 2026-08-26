@@ -84,12 +84,28 @@ history.
 
 ### Charging sessions
 
-A session starts the moment something is plugged into a port and its total stays
-on screen after the device is taken off, so *how much did that get?* is still
-answerable once the phone is back in your pocket. Plugging the next thing in
-starts a new session from zero. Both session sensors carry the same detail in
-their attributes: `charging`, `started`, `ended`, `duration`, `peak_power`,
-`average_power` and `protocol`.
+A session is a *bout of charging*: it starts when current begins to flow and its
+total stays on screen afterwards, so *how much did that get?* is still answerable
+once the phone is back in your pocket. The next bout starts a new session from zero.
+Both session sensors carry the same detail in their attributes: `charging`,
+`started`, `ended`, `duration`, `peak_power`, `average_power`, `last_draw` and
+`protocol`.
+
+It is a bout rather than the span between plugging in and unplugging because **this
+charger cannot tell you a device has been removed.** It holds the port live and keeps
+the negotiated USB-PD contract alive with nothing but a cable in the socket — 5 V and
+`PD`, indistinguishable from an attached device that is not currently drawing. The
+report's per-port occupancy byte says "present" for a bare cable too. So the end of a
+session is decided by the current going away and staying away, which is what
+*Session ends after* configures; a port that does report itself empty — some do —
+ends its session at once instead of waiting that out.
+
+That setting is a real trade-off, and the right value depends on what lives on the
+port. A phone left at 100% tops itself up every so often, and those sips have to land
+inside the same session, or a 5 mAh trickle would start a "new session" and the charge
+that actually went into the phone would disappear off the card. The two-hour default
+clears that comfortably. The cost is at the other end: two devices swapped on the same
+cable less than two hours apart are counted as one session.
 
 The charger reports no energy total, so this is integrated from the per-port
 wattage, and three things about the device shape how:
@@ -102,13 +118,15 @@ wattage, and three things about the device shape how:
 - **The cloud drops out for minutes at a time.** An outage leaves a session
   exactly as it was rather than reading as an unplug, and the missing minutes are
   not filled in with the last known wattage.
-- **A full device left plugged in still reports 0.1 A**, the measurement quantum
-  rather than charge going anywhere. At 9 V that looks like 0.9 W and would
-  invent close to a whole battery over a night, so readings below 0.15 A are not
-  counted.
+- **Neither current nor power can be trusted on its own.** A full device still
+  reports the 0.1 A measurement quantum, which at 9 V looks like 0.9 W and would
+  invent close to a whole battery over a night; a bare cable produces the mirror
+  image, a stray 0.3 A that the charger itself reports as 0.0 W. Charge counts as
+  flowing only when both are above their floors: 0.15 A and 0.5 W.
 
 Sessions survive a restart of Home Assistant. If the device on the port changed
-while it was down, the old total is dropped rather than added to.
+while it was down, or the downtime outlasted the idle window, the old total is
+left as it was rather than added to.
 
 **What the device does not offer.** Its TSL model declares `WiFiRSSI`,
 `errorCode`, `IPAddress` and more, but this charger never populates them — asking
@@ -252,6 +270,7 @@ property, which is what makes it download the file.
 | Poll every | 5 s | how often a reading arrives, measured start to start; the wait for the charger to answer comes out of it, not on top |
 | Battery voltage | 3.85 V | only used to read a session's watt-hours back as milliamp-hours; a laptop's pack is far higher |
 | Charging efficiency | 90 % | how much of what leaves the port reaches the cell; the rest is heat |
+| Session ends after | 120 min | how long a port must deliver nothing before its charging session is finished; see [Charging sessions](#charging-sessions) for the trade-off |
 | Region | as set up | only if the account itself moved servers; the password is re-checked first |
 | Debug snapshot | off | writes the unedited cloud payload to `ugreen_connect_debug.json` |
 

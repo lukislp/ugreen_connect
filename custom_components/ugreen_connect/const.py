@@ -55,6 +55,13 @@ DEFAULT_EFFICIENCY: Final = 90
 # schedule; this multiple of the poll period is where "roughly" stops.
 SESSION_GAP_FACTOR: Final = 4
 
+# How long a port has to draw nothing before its charging session counts as over.
+# The charger cannot say whether a device is still attached -- it holds the port live
+# for a bare cable -- so this is the only thing that can end a session. See session.py
+# for what it is trading off.
+CONF_IDLE_END: Final = "session_idle_end"
+DEFAULT_IDLE_END: Final = 120  # minutes
+
 # --- RTCX/Polaris gateway (live telemetry) ---------------------------------
 # The gateway envelope uses an underscore locale, unlike the account API header.
 GATEWAY_LANGUAGE: Final = "en_US"

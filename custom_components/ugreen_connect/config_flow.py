@@ -32,9 +32,11 @@ from .api import UgreenApi, UgreenAuthError, UgreenError
 from .const import (
     CONF_DEBUG_DUMP,
     CONF_EFFICIENCY,
+    CONF_IDLE_END,
     CONF_NOMINAL_VOLTAGE,
     CONF_REGION,
     DEFAULT_EFFICIENCY,
+    DEFAULT_IDLE_END,
     DEFAULT_LANGUAGE,
     DEFAULT_NOMINAL_VOLTAGE,
     DEFAULT_REGION,
@@ -77,6 +79,12 @@ STEP_USER_SCHEMA = vol.Schema(
                 mode=NumberSelectorMode.SLIDER,
             )
         ),
+        vol.Required(CONF_IDLE_END, default=DEFAULT_IDLE_END): NumberSelector(
+            NumberSelectorConfig(
+                min=5, max=1440, step=5, unit_of_measurement="min",
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
         vol.Required(CONF_DEBUG_DUMP, default=False): bool,
     }
 )
@@ -112,6 +120,12 @@ OPTIONS_SCHEMA = vol.Schema(
             NumberSelectorConfig(
                 min=50, max=100, step=1, unit_of_measurement="%",
                 mode=NumberSelectorMode.SLIDER,
+            )
+        ),
+        vol.Required(CONF_IDLE_END, default=DEFAULT_IDLE_END): NumberSelector(
+            NumberSelectorConfig(
+                min=5, max=1440, step=5, unit_of_measurement="min",
+                mode=NumberSelectorMode.BOX,
             )
         ),
         vol.Required(CONF_DEBUG_DUMP, default=False): bool,
@@ -247,6 +261,7 @@ class UgreenOptionsFlow(OptionsFlow):
                         CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
                         CONF_NOMINAL_VOLTAGE: float(user_input[CONF_NOMINAL_VOLTAGE]),
                         CONF_EFFICIENCY: int(user_input[CONF_EFFICIENCY]),
+                        CONF_IDLE_END: int(user_input[CONF_IDLE_END]),
                     }
                 )
 
@@ -258,6 +273,7 @@ class UgreenOptionsFlow(OptionsFlow):
                 CONF_NOMINAL_VOLTAGE, DEFAULT_NOMINAL_VOLTAGE
             ),
             CONF_EFFICIENCY: entry.options.get(CONF_EFFICIENCY, DEFAULT_EFFICIENCY),
+            CONF_IDLE_END: entry.options.get(CONF_IDLE_END, DEFAULT_IDLE_END),
             CONF_REGION: entry.data.get(CONF_REGION, DEFAULT_REGION),
             CONF_DEBUG_DUMP: entry.data.get(CONF_DEBUG_DUMP, False),
         }

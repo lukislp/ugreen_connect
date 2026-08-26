@@ -20,6 +20,8 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MIN_POLL_GAP,
+    CONF_IDLE_END,
+    DEFAULT_IDLE_END,
     SESSION_GAP_FACTOR,
     STATIC_INFO_INTERVAL,
     WALLPAPER_LIST_INTERVAL,
@@ -64,7 +66,8 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # period, so what counts as a hole has to follow the configured interval
         # rather than a fixed number of seconds.
         self.sessions = SessionTracker(
-            max_gap=max(MAX_GAP, self._target_period * SESSION_GAP_FACTOR)
+            max_gap=max(MAX_GAP, self._target_period * SESSION_GAP_FACTOR),
+            idle_end=entry.options.get(CONF_IDLE_END, DEFAULT_IDLE_END) * 60,
         )
         self._debug_dump = debug_dump
         self._dumped = False
