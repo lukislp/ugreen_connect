@@ -41,6 +41,9 @@ import aiohttp
 from .api import UgreenApi, UgreenAuthError, UgreenError
 from .const import (
     CHARGING_MODES,
+    CUSTOM_PORTS,
+    CUSTOM_PROTOCOLS,
+    CUSTOM_SHARED_STEP,
     GATEWAY_LANGUAGE,
     GATEWAY_OK,
     HANDSHAKE_PROTOCOL,
@@ -90,6 +93,12 @@ STATE_BRIGHTNESS = 2
 STATE_SLEEP_TIME = 3
 STATE_CHARGING_MODE = 4
 STATE_SCREENSAVER = 40  # then theme at 41 and a further flag at 42
+# The custom mode's 35 parameters sit between the mode byte and the screensaver
+# flag, which is why nothing needed them to be understood before now.
+STATE_CUSTOM = 5
+STATE_CUSTOM_MASKS = 16
+STATE_CUSTOM_END = 40
+CUSTOM_LIMITS = 5  # ports carrying a plain wattage; C6+A follows as one byte
 STATE_IMAGE_ID = 43  # six ASCII bytes naming the wallpaper in use
 STATE_WALLPAPER_COUNT = 49  # then that many six-byte ids
 IMAGE_ID_LEN = 6
@@ -165,6 +174,48 @@ def parse_power_frame(value: str) -> dict[str, dict[str, Any]] | None:
             ),
         }
     return ports
+
+
+def parse_custom_mode(body: bytes) -> list[dict[str, Any]] | None:
+    """Decode the parameter block only the custom charging mode fills in.
+
+    Layout, established against the app's editor on a live charger by changing
+    one slider at a time and reading the frame back::
+
+         5..14   C1..C5 power limit, U16 big endian, in watts
+        15       C6 and A together, in 15 W steps -- their slider has three
+        16..39   one U32 big-endian protocol bitmask per group, C1 first
+
+    A preset leaves the whole block at zero, which is how "no custom mode
+    configured" is told apart from a configured one that happens to be idle.
+    """
+    if len(body) < STATE_CUSTOM_END:
+        return None
+    if not any(body[STATE_CUSTOM:STATE_CUSTOM_END]):
+        return None
+
+    limits = [
+        int.from_bytes(body[STATE_CUSTOM + 2 * i : STATE_CUSTOM + 2 * i + 2], "big")
+        for i in range(CUSTOM_LIMITS)
+    ]
+    # The shared group stores its step rather than its wattage.
+    limits.append(body[STATE_CUSTOM + 2 * CUSTOM_LIMITS] * CUSTOM_SHARED_STEP)
+
+    groups = []
+    for index, name in enumerate(CUSTOM_PORTS):
+        at = STATE_CUSTOM_MASKS + 4 * index
+        mask = int.from_bytes(body[at : at + 4], "big")
+        groups.append(
+            {
+                "port": name,
+                "limit": limits[index],
+                "protocols": [
+                    label for bit, label in CUSTOM_PROTOCOLS.items() if mask >> bit & 1
+                ],
+                "mask": mask,
+            }
+        )
+    return groups
 
 
 class RtcxClient:
@@ -427,6 +478,7 @@ class RtcxClient:
             "brightness": body[STATE_BRIGHTNESS],
             "sleep_time": body[STATE_SLEEP_TIME],
             "charging_mode": CHARGING_MODES.get(body[STATE_CHARGING_MODE]),
+            "custom": parse_custom_mode(body),
             "screensaver": bool(body[STATE_SCREENSAVER]),
             "screensaver_theme": body[STATE_SCREENSAVER + 1],
             "screensaver_flag": body[STATE_SCREENSAVER + 2],

@@ -33,12 +33,15 @@ from .const import (
     CONF_NOMINAL_VOLTAGE,
     DEFAULT_EFFICIENCY,
     DEFAULT_NOMINAL_VOLTAGE,
+    CUSTOM_PORTS,
+    CUSTOM_SHARED_GROUP,
+    CUSTOM_SHARED_MEMBERS,
     DOMAIN,
     HANDSHAKE_PROTOCOL,
     X783_PORTS,
 )
 from .coordinator import UgreenCoordinator, device_key
-from .entity import ONLINE, UgreenDeviceEntity
+from .entity import ONLINE, UgreenDeviceEntity, UgreenPortEntity
 from .session import Session, charge_mah
 
 # The report always carries all eight slots.
@@ -93,6 +96,22 @@ async def async_setup_entry(
             if (key, "total") not in known_ports:
                 known_ports.add((key, "total"))
                 new.append(UgreenTotalPowerSensor(coordinator, key))
+            # Only once the charger has actually reported a custom mode: a
+            # device that has never had one configured would otherwise carry
+            # six entities that can never say anything.
+            if reading.get("custom") and (key, "custom") not in known_ports:
+                known_ports.add((key, "custom"))
+                for port in CUSTOM_PORTS:
+                    if port != CUSTOM_SHARED_GROUP:
+                        new.append(UgreenCustomLimitSensor(coordinator, key, port))
+                        continue
+                    # One setting, two sockets: both say so, and each names
+                    # the other.
+                    new.extend(
+                        UgreenCustomLimitSensor(coordinator, key, socket, group=port,
+                                                shared_with=other)
+                        for socket, other in CUSTOM_SHARED_MEMBERS.items()
+                    )
             # Every real port of the device gets its entities up front, so the
             # dashboard shows the full layout from the start rather than waiting
             # for a port to happen to be drawing power during a poll. DC is the
@@ -152,7 +171,7 @@ class UgreenStatusSensor(UgreenDeviceEntity, SensorEntity):
         }
 
 
-class UgreenPortSensor(UgreenDeviceEntity, SensorEntity):
+class UgreenPortSensor(UgreenPortEntity, SensorEntity):
     """Voltage, current or power of a single charging port."""
 
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -185,7 +204,7 @@ class UgreenPortSensor(UgreenDeviceEntity, SensorEntity):
         return (reading["ports"].get(self._port) or {}).get(self._kind)
 
 
-class UgreenPortProtocolSensor(UgreenDeviceEntity, SensorEntity):
+class UgreenPortProtocolSensor(UgreenPortEntity, SensorEntity):
     """Fast-charge protocol a port negotiated with whatever is plugged into it."""
 
     _attr_device_class = SensorDeviceClass.ENUM
@@ -209,6 +228,68 @@ class UgreenPortProtocolSensor(UgreenDeviceEntity, SensorEntity):
         if not reading:
             return None
         return (reading["ports"].get(self._port) or {}).get("protocol")
+
+
+class UgreenCustomLimitSensor(UgreenPortEntity, SensorEntity):
+    """What one port is allowed in the custom charging mode.
+
+    This is the mode the app calls its own editor, and the charger reports the
+    whole of it on every poll whether or not it is the mode in use. So these
+    say what custom *would* do, not what is happening now -- which is why they
+    are diagnostic rather than sitting beside the live readings.
+
+    C6 and A share a group, exactly as the app's editor does; the protocols the
+    group may negotiate ride along as an attribute rather than as six more
+    entities.
+    """
+
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator: UgreenCoordinator,
+        key: str,
+        port: str,
+        *,
+        group: str | None = None,
+        shared_with: str | None = None,
+    ) -> None:
+        super().__init__(coordinator, key)
+        # Which socket this sits on, and which entry of the mode it reads --
+        # the same for every port but the shared pair.
+        self._port = port
+        self._group_name = group or port
+        self._attr_translation_key = (
+            "custom_limit_shared" if shared_with else "custom_limit"
+        )
+        self._attr_translation_placeholders = {"port": port, "other": shared_with or ""}
+        self._attr_unique_id = f"{key}_{port}_custom_limit"
+
+    @property
+    def _group(self) -> dict[str, Any] | None:
+        for group in (self._reading or {}).get("custom") or []:
+            if group["port"] == self._group_name:
+                return group
+        return None
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._group is not None
+
+    @property
+    def native_value(self) -> int | None:
+        group = self._group
+        return group["limit"] if group else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        group = self._group or {}
+        return {
+            "protocols": group.get("protocols") or [],
+            "group": self._group_name,
+        }
 
 
 class UgreenTotalPowerSensor(UgreenDeviceEntity, SensorEntity):
@@ -242,7 +323,7 @@ class UgreenTotalPowerSensor(UgreenDeviceEntity, SensorEntity):
         }
 
 
-class UgreenSessionSensor(UgreenDeviceEntity, SensorEntity):
+class UgreenSessionSensor(UgreenPortEntity, SensorEntity):
     """Shared base for the two views of one port's charging session.
 
     A session runs from the moment something is plugged into the port until it is

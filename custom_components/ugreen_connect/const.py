@@ -113,6 +113,34 @@ SELECTABLE_MODES: Final[tuple[str, ...]] = (
     "adaptive_power", "thermal_safe", "dc_turbo", "priority",
 )
 
+# --- The custom mode's parameter block --------------------------------------
+# The 35 bytes the presets leave at zero. Settled against the app's own editor
+# on a live X783: five ports carry a plain wattage, C6 and A share one setting
+# -- one slider in the app, one byte here -- and each group then has a bitmask
+# of the protocols it may negotiate.
+CUSTOM_PORTS: Final[tuple[str, ...]] = ("C1", "C2", "C3", "C4", "C5", "C6+A")
+# The shared C6+A slider offers 0, 15 and 30 W, and stores the step, not the
+# watts. The five plain ports store watts outright.
+CUSTOM_SHARED_STEP: Final = 15
+# C6 and A are one setting but two sockets. Each socket carries it, so that a
+# port's page answers "what is this port allowed" without sending anyone
+# elsewhere; the name says which other port the figure is shared with.
+CUSTOM_SHARED_GROUP: Final = "C6+A"
+CUSTOM_SHARED_MEMBERS: Final[dict[str, str]] = {"C6": "A1", "A1": "C6"}
+
+# Bit positions in a group's protocol mask. The app lists exactly these seven,
+# in this order; bit 1 is never offered on the ports seen so far and so has no
+# name yet.
+CUSTOM_PROTOCOLS: Final[dict[int, str]] = {
+    0: "Apple 5V/2.4A",
+    2: "AFC",
+    3: "SCP",
+    4: "UFCS",
+    5: "5-11V PPS",
+    6: "5-21V PPS",
+    7: "AVS",
+}
+
 # The two bytes after the screensaver's on/off flag. Both were settled by
 # changing them in the app and reading the frame it sent: picking 12- or 24-hour
 # moves the first, and Clock Style 1 / 2 moves the second. (An earlier guess had

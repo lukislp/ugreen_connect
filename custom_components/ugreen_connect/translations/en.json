@@ -54,22 +54,28 @@
         "name": "Total power"
       },
       "port_power": {
-        "name": "{port} power"
+        "name": "Power"
       },
       "port_voltage": {
-        "name": "{port} voltage"
+        "name": "Voltage"
       },
       "port_current": {
-        "name": "{port} current"
+        "name": "Current"
       },
       "port_protocol": {
-        "name": "{port} protocol"
+        "name": "Protocol"
+      },
+      "custom_limit": {
+        "name": "Custom limit"
       },
       "session_energy": {
-        "name": "{port} session energy"
+        "name": "Session energy"
       },
       "session_charge": {
-        "name": "{port} session charge"
+        "name": "Session charge"
+      },
+      "custom_limit_shared": {
+        "name": "Custom limit (shared with {other})"
       }
     },
     "number": {
