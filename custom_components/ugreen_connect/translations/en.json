@@ -85,6 +85,9 @@
       },
       "last_poll": {
         "name": "Last successful poll"
+      },
+      "energy_total": {
+        "name": "Total energy"
       }
     },
     "number": {

@@ -118,9 +118,18 @@ class SessionTracker:
         self._max_gap = max_gap
         self._idle_end = idle_end
         self._sessions: dict[tuple[str, str], Session] = {}
+        # The same watt-hours a session counts, but never reset. A session is
+        # deliberately a bout and starts over; the Energy dashboard needs a
+        # figure that only ever grows. Counted since this process started --
+        # the sensor carries what came before it across a restart.
+        self._delivered: dict[tuple[str, str], float] = {}
 
     def session(self, key: str, port: str) -> Session | None:
         return self._sessions.get((key, port))
+
+    def delivered(self, key: str, port: str) -> float:
+        """Watt-hours this port has passed since the tracker was made."""
+        return self._delivered.get((key, port), 0.0)
 
     def restore(self, key: str, port: str, saved: dict) -> None:
         """Take back a session saved before a restart.
@@ -189,7 +198,14 @@ class SessionTracker:
             swapped = state.empty_since is not None and _swapped(state.protocol, protocol)
             if finished or stale or swapped:
                 state = self._restart(key, port)
+            before = state.energy_wh
             self._advance(now, state, protocol, values)
+            # Whatever the session just gained, the lifetime total gains too.
+            # Taking it here rather than inside _integrate keeps one place
+            # where energy is measured and one where it is attributed.
+            self._delivered[(key, port)] = (
+                self._delivered.get((key, port), 0.0) + state.energy_wh - before
+            )
 
     def _restart(self, key: str, port: str) -> Session:
         state = Session()

@@ -85,6 +85,9 @@
       },
       "last_poll": {
         "name": "Letzte erfolgreiche Abfrage"
+      },
+      "energy_total": {
+        "name": "Energie insgesamt"
       }
     },
     "number": {

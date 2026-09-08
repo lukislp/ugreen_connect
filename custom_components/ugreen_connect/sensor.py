@@ -132,6 +132,7 @@ async def async_setup_entry(
                     for kind in MEASUREMENTS
                 )
                 new.append(UgreenPortProtocolSensor(coordinator, key, port))
+                new.append(UgreenPortEnergySensor(coordinator, key, port))
                 new.append(UgreenSessionEnergySensor(coordinator, key, port))
                 new.append(UgreenSessionChargeSensor(coordinator, key, port))
         if new:
@@ -199,6 +200,55 @@ class UgreenLastPollSensor(UgreenDeviceEntity, SensorEntity):
     def native_value(self):
         stamp = self.coordinator.last_success
         return dt_util.utc_from_timestamp(stamp) if stamp else None
+
+
+class UgreenPortEnergySensor(UgreenPortEntity, SensorEntity, RestoreEntity):
+    """Everything this port has ever delivered, for the Energy dashboard.
+
+    The charger keeps no energy total of its own -- it reports watts and
+    nothing else -- so this is integrated from those, by the same code and the
+    same thresholds the sessions use. The tracker only counts from the moment
+    it was made, so what came before a restart is read back from the sensor's
+    own last state and added underneath.
+
+    Kilowatt-hours here rather than the watt-hours a session is measured in:
+    a bout is worth tens of watt-hours and reads badly as 0.02 kWh, while a
+    total climbs past a kilowatt-hour and reads badly the other way round.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 3
+    _attr_translation_key = "energy_total"
+
+    def __init__(self, coordinator: UgreenCoordinator, key: str, port: str) -> None:
+        super().__init__(coordinator, key)
+        self._port = port
+        self._attr_translation_placeholders = {"port": port}
+        self._attr_unique_id = f"{key}_{port}_energy_total"
+        self._before_restart = 0.0
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_state()) is None:
+            return
+        try:
+            self._before_restart = float(last.state)
+        except (TypeError, ValueError):
+            # `unknown` or `unavailable` from a start that never got a reading.
+            # Starting from zero would make the dashboard read this as a meter
+            # replacement rather than as a gap, which is the honest outcome
+            # anyway when nothing better is known.
+            self._before_restart = 0.0
+
+    @property
+    def native_value(self) -> float:
+        return round(
+            self._before_restart
+            + self.coordinator.sessions.delivered(self._key, self._port) / 1000,
+            6,
+        )
 
 
 class UgreenPortSensor(UgreenPortEntity, SensorEntity):
