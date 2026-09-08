@@ -8,9 +8,15 @@
           "email": "E-Mail",
           "password": "Passwort",
           "region": "Region",
+          "nominal_voltage": "Akkuspannung",
+          "efficiency": "Ladeeffizienz",
+          "session_idle_end": "Ladevorgang endet nach",
           "debug_dump": "Rohen Cloud-Schnappschuss in den Konfigurationsordner schreiben"
         },
         "data_description": {
+          "nominal_voltage": "Wird nur benutzt, um die Wattstunden eines Ladevorgangs als Milliamperestunden zu lesen. 3,85 V ist die Nennspannung der Zellen in Handys, Kopfhörern und Handhelds; der Akku eines Laptops liegt weit darüber, und dessen Milliamperestunden-Wert bedeutet nichts, solange dieser Wert nicht dazu passt.",
+          "efficiency": "Wie viel von dem, was den Port verlässt, in der Zelle ankommt. Der Rest wird zu Wärme im Kabel und im Wandler des Geräts.",
+          "session_idle_end": "Wie lange ein Port nichts liefern muss, bevor sein Ladevorgang als beendet gilt und der nächste beginnen darf. Das Ladegerät hält einen Port auch für ein bloßes Kabel aktiv, deshalb ist das das Einzige, was einen Ladevorgang beenden kann. Lang genug, dass ein Handy, das sich bei 100 % nachlädt, ein einziger Ladevorgang bleibt; kürzer, wenn am selben Kabel innerhalb weniger Stunden Geräte gewechselt werden.",
           "debug_dump": "Speichert ugreen_connect_debug.json einmal pro Neustart. Nützlich, solange die Integration noch ausgebaut wird; kann später gefahrlos abgeschaltet werden."
         }
       },
