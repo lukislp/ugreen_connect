@@ -67,8 +67,14 @@ FRAME_NOTIFY = 0xEE
 FRAME_SETTING = 0x11
 
 QUERY_GET_DEVICE_STATE = 1
+# Answers with exactly the deviceUniqueCode the account API has already
+# handed over, so there is nothing to be gained by asking. Checked against a
+# live X783 rather than assumed.
 QUERY_GET_SN = 5
 QUERY_GET_POWER_INFO = 6
+# Answers empty on the X783 -- asked for and read back as an empty string --
+# so there is nothing here to publish either. OTA state comes from the
+# OTA_ugrade property instead, which is what ota_state() reads.
 QUERY_GET_UPGRADE_STATUS = 7
 QUERY_GET_WIFI_SSID = 8
 QUERY_GET_PRODUCT_VERSION = 10

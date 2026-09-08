@@ -38,6 +38,13 @@ MIN_SCAN_INTERVAL: Final = 5
 # period this is what stops it becoming a back-to-back loop against the cloud.
 MIN_POLL_GAP: Final = 1.0
 MAX_SCAN_INTERVAL: Final = 900
+# Nothing is charging most of the time, and a charger with every port idle has
+# nothing to say that five seconds apart is any better at catching. Backing off
+# while that lasts is the difference between ~17,000 polls a day against
+# someone else's cloud and a small fraction of it; the moment any port draws
+# again the configured period is back.
+IDLE_SCAN_FACTOR: Final = 6
+IDLE_SCAN_MAX: Final = 60
 
 # --- Charging sessions ------------------------------------------------------
 # Watt-hours are what the charger actually delivers; milliamp-hours are what

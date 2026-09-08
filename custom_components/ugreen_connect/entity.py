@@ -64,6 +64,8 @@ class UgreenDeviceEntity(CoordinatorEntity[UgreenCoordinator]):
             name=device.get("deviceName") or f"UGREEN {self._key}",
             model=self._product.get("name") or device.get("deviceName"),
             model_id=self._product.get("productNo"),
+            # deviceUniqueCode, which the charger confirms is its own serial:
+            # asking it directly with GET_SN answers with the same string.
             serial_number=self._key,
         )
         if firmware := (self._reading or {}).get("firmware"):

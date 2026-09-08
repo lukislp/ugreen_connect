@@ -88,6 +88,9 @@
       },
       "energy_total": {
         "name": "Total energy"
+      },
+      "ssid": {
+        "name": "Wi-Fi network"
       }
     },
     "number": {

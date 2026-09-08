@@ -17,6 +17,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import UgreenApi, UgreenAuthError, UgreenError
 from .const import (
     DEBUG_DUMP_FILE,
+    IDLE_SCAN_FACTOR,
+    IDLE_SCAN_MAX,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MIN_POLL_GAP,
@@ -71,6 +73,9 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         # When a poll last came back whole, published as a sensor of its own.
         self.last_success: float | None = None
+        # Whether the last poll found any port drawing, which decides how soon
+        # the next one is due.
+        self._drawing = True
         self._debug_dump = debug_dump
         self._dumped = False
         self._power_errors: dict[str, str] = {}
@@ -105,7 +110,12 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         a slow or silent device from turning that into back-to-back requests,
         which is the one way this could make things worse rather than better.
         """
-        gap = max(MIN_POLL_GAP, self._target_period - elapsed)
+        period = self._target_period
+        if not self._drawing:
+            period = min(period * IDLE_SCAN_FACTOR, IDLE_SCAN_MAX)
+            # ...unless the owner already asked for something slower.
+            period = max(period, self._target_period)
+        gap = max(MIN_POLL_GAP, period - elapsed)
         wanted = timedelta(seconds=gap)
         if self.update_interval != wanted:
             self.update_interval = wanted
@@ -165,6 +175,12 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 errors[key] = str(err)
                 power[key] = None
         self._power_errors = errors
+        # A poll that failed says nothing about whether anything is charging,
+        # so an outage keeps the fast rate rather than quietly slowing down
+        # exactly when someone is watching for the charger to come back.
+        self._drawing = not power or any(
+            reading is None or reading.get("total") for reading in power.values()
+        )
 
         # Only readings that actually arrived are folded in: a failed poll has to
         # leave every session untouched, or an outage would read as an unplug.

@@ -88,6 +88,9 @@
       },
       "energy_total": {
         "name": "Energie insgesamt"
+      },
+      "ssid": {
+        "name": "WLAN-Netz"
       }
     },
     "number": {
