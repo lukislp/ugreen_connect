@@ -76,6 +76,9 @@
       },
       "custom_limit_shared": {
         "name": "Custom limit (shared with {other})"
+      },
+      "last_poll": {
+        "name": "Last successful poll"
       }
     },
     "number": {
@@ -133,6 +136,11 @@
         "state": {
           "none": "None"
         }
+      }
+    },
+    "binary_sensor": {
+      "charging": {
+        "name": "Charging"
       }
     }
   },

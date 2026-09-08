@@ -89,6 +89,7 @@ async def async_setup_entry(
             if key not in known:
                 known.add(key)
                 new.append(UgreenStatusSensor(coordinator, key))
+                new.append(UgreenLastPollSensor(coordinator, key))
 
             reading = (coordinator.data.get("power") or {}).get(key)
             if not reading:
@@ -169,6 +170,35 @@ class UgreenStatusSensor(UgreenDeviceEntity, SensorEntity):
             "network_connected": extra.get("networkStatus") == ONLINE,
             "mac": device.get("deviceMac"),
         }
+
+
+class UgreenLastPollSensor(UgreenDeviceEntity, SensorEntity):
+    """When a poll last came back whole.
+
+    The cloud this integration talks to drops out for minutes at a time, and
+    every other entity simply keeps its last value while that happens. This is
+    the one that says how old that value is.
+    """
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "last_poll"
+
+    def __init__(self, coordinator: UgreenCoordinator, key: str) -> None:
+        super().__init__(coordinator, key)
+        self._attr_unique_id = f"{key}_last_poll"
+
+    @property
+    def available(self) -> bool:
+        # Deliberately not tied to the last poll succeeding. Saying when the
+        # last good reading arrived is exactly what is wanted while polls are
+        # failing, which is when every other entity has gone unavailable.
+        return bool(self._device)
+
+    @property
+    def native_value(self):
+        stamp = self.coordinator.last_success
+        return dt_util.utc_from_timestamp(stamp) if stamp else None
 
 
 class UgreenPortSensor(UgreenPortEntity, SensorEntity):

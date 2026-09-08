@@ -69,6 +69,8 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             max_gap=max(MAX_GAP, self._target_period * SESSION_GAP_FACTOR),
             idle_end=entry.options.get(CONF_IDLE_END, DEFAULT_IDLE_END) * 60,
         )
+        # When a poll last came back whole, published as a sensor of its own.
+        self.last_success: float | None = None
         self._debug_dump = debug_dump
         self._dumped = False
         self._power_errors: dict[str, str] = {}
@@ -80,9 +82,14 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         started = time.monotonic()
         try:
-            return await self._async_poll()
+            data = await self._async_poll()
         finally:
             self._reschedule(time.monotonic() - started)
+        # Only set once a poll has come back whole: the point of publishing it
+        # is to say how stale the readings are while the cloud is away, and
+        # this cloud goes away for minutes at a time.
+        self.last_success = time.time()
+        return data
 
     def _reschedule(self, elapsed: float) -> None:
         """Keep a steady poll *period*, not a steady gap between polls.
