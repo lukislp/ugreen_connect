@@ -1,0 +1,184 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "UGREEN Connect",
+        "description": "Melde dich mit demselben Konto an, das du in der UgreenConnect-App verwendest. Wähle die Region, in der dein Konto registriert wurde — Konten werden nicht zwischen Regionen geteilt.",
+        "data": {
+          "email": "E-Mail",
+          "password": "Passwort",
+          "region": "Region",
+          "debug_dump": "Rohen Cloud-Schnappschuss in den Konfigurationsordner schreiben"
+        },
+        "data_description": {
+          "debug_dump": "Speichert ugreen_connect_debug.json einmal pro Neustart. Nützlich, solange die Integration noch ausgebaut wird; kann später gefahrlos abgeschaltet werden."
+        }
+      },
+      "reauth_confirm": {
+        "title": "UGREEN Connect neu anmelden",
+        "description": "Das Passwort für {email} wurde abgelehnt. Gib es erneut ein.",
+        "data": {
+          "password": "Passwort"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Die UGREEN-Cloud war nicht erreichbar.",
+      "invalid_auth": "Konto oder Passwort wurde abgelehnt."
+    },
+    "abort": {
+      "already_configured": "Dieses Konto ist bereits eingerichtet.",
+      "reauth_successful": "Die erneute Anmeldung war erfolgreich."
+    }
+  },
+  "selector": {
+    "region": {
+      "options": {
+        "europe": "Europa",
+        "america": "Amerika",
+        "asia": "Asien / übrige Welt",
+        "china": "China"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Cloud-Status",
+        "state": {
+          "online": "Online",
+          "offline": "Offline"
+        }
+      },
+      "total_power": {
+        "name": "Gesamtleistung"
+      },
+      "port_power": {
+        "name": "{port} Leistung"
+      },
+      "port_voltage": {
+        "name": "{port} Spannung"
+      },
+      "port_current": {
+        "name": "{port} Stromstärke"
+      },
+      "port_protocol": {
+        "name": "{port} Protokoll"
+      },
+      "session_energy": {
+        "name": "{port} Energie des Ladevorgangs"
+      },
+      "session_charge": {
+        "name": "{port} Ladung des Ladevorgangs"
+      }
+    },
+    "number": {
+      "screen_brightness": {
+        "name": "Bildschirmhelligkeit"
+      }
+    },
+    "switch": {
+      "screensaver": {
+        "name": "Bildschirmschoner"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
+    },
+    "select": {
+      "charging_mode": {
+        "name": "Lademodus",
+        "state": {
+          "adaptive_power": "Schnellladung",
+          "thermal_safe": "Niedrigtemperatur-Einsparung",
+          "dc_turbo": "DC-Schnellladung",
+          "priority": "Port-Priorität",
+          "custom": "Port-Anpassung"
+        }
+      },
+      "clock_style": {
+        "name": "Uhrenstil",
+        "state": {
+          "style_1": "Stil 1",
+          "style_2": "Stil 2"
+        }
+      },
+      "time_format": {
+        "name": "Zeitformat",
+        "state": {
+          "12h": "12 Stunden",
+          "24h": "24 Stunden"
+        }
+      },
+      "screen_off_time": {
+        "name": "Bildschirm aus nach",
+        "state": {
+          "1_min": "1 Minute",
+          "5_min": "5 Minuten",
+          "10_min": "10 Minuten",
+          "30_min": "30 Minuten",
+          "always_on": "Immer an"
+        }
+      },
+      "wallpaper": {
+        "name": "Hintergrundbild",
+        "state": {
+          "none": "Keines"
+        }
+      }
+    }
+  },
+  "services": {
+    "set_wallpaper": {
+      "name": "Hintergrundbild setzen",
+      "description": "Lädt ein Bild hoch und zeigt es auf dem Display des Ladegeräts an. Es wird mittig auf 560x170 zugeschnitten; in der Karte lässt sich der Ausschnitt selbst wählen.",
+      "fields": {
+        "device_id": {
+          "name": "Ladegerät",
+          "description": "An welches Ladegerät das Bild geschickt wird."
+        },
+        "path": {
+          "name": "Datei",
+          "description": "Pfad zu einem Bild auf dem Home-Assistant-Host, z. B. /config/www/desk.jpg."
+        },
+        "url": {
+          "name": "URL",
+          "description": "Adresse eines Bildes, das geholt und hochgeladen wird."
+        },
+        "image": {
+          "name": "Bilddaten",
+          "description": "Das Bild selbst, Base64-kodiert, mit oder ohne data:-Präfix."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "UGREEN-Connect-Optionen",
+        "data": {
+          "scan_interval": "Abfrage alle",
+          "region": "Region",
+          "debug_dump": "Rohen Cloud-Schnappschuss in den Konfigurationsordner schreiben",
+          "nominal_voltage": "Akkuspannung",
+          "efficiency": "Ladeeffizienz",
+          "session_idle_end": "Ladevorgang endet nach"
+        },
+        "data_description": {
+          "scan_interval": "Wie oft ein Messwert eintrifft. Von Start zu Start gemessen, die Wartezeit auf die Antwort des Ladegeräts geht also davon ab, statt oben drauf zu kommen. 5 s hält die Wattzahl lebendig; höhere Werte belasten UGREENs Server weniger.",
+          "region": "Nur ändern, wenn das Konto selbst auf einen anderen Server umgezogen ist. Das Passwort wird gegen die neue Region geprüft, bevor die Änderung übernommen wird.",
+          "debug_dump": "Speichert ugreen_connect_debug.json bei jeder Aktualisierung. Es ist die unbearbeitete Antwort der Cloud.",
+          "nominal_voltage": "Wird nur benutzt, um die Wattstunden eines Ladevorgangs als Milliamperestunden zu lesen. 3,85 V ist die Nennspannung der Zellen in Handys, Kopfhörern und Handhelds; der Akku eines Laptops liegt weit darüber, und dessen Milliamperestunden-Wert bedeutet nichts, solange dieser Wert nicht dazu passt.",
+          "efficiency": "Wie viel von dem, was den Port verlässt, in der Zelle ankommt. Der Rest wird zu Wärme im Kabel und im Wandler des Geräts.",
+          "session_idle_end": "Wie lange ein Port nichts liefern muss, bevor sein Ladevorgang als beendet gilt und der nächste beginnen darf. Das Ladegerät hält einen Port auch für ein bloßes Kabel aktiv, deshalb ist das das Einzige, was einen Ladevorgang beenden kann. Lang genug, dass ein Handy, das sich bei 100 % nachlädt, ein einziger Ladevorgang bleibt; kürzer, wenn am selben Kabel innerhalb weniger Stunden Geräte gewechselt werden."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Die UGREEN-Cloud war nicht erreichbar.",
+      "invalid_auth": "Konto oder Passwort wurde in dieser Region abgelehnt."
+    }
+  }
+}

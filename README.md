@@ -295,8 +295,8 @@ is checked against both rather than mocked.
 
 Everything the integration says goes through
 `custom_components/ugreen_connect/translations/`. Copy `en.json`, name it for
-your language, translate the values, and open a pull request. Only English and
-Russian exist so far.
+your language, translate the values, and open a pull request. English, German
+and Russian exist so far.
 
 The dashboard card keeps its own text in one table at the top of
 `www/ugreen-wallpaper-card.js`: copy the `en` block, key it by language code,
