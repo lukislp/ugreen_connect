@@ -136,8 +136,10 @@ CUSTOM_SHARED_GROUP: Final = "C6+A"
 CUSTOM_SHARED_MEMBERS: Final[dict[str, str]] = {"C6": "A1", "A1": "C6"}
 
 # Bit positions in a group's protocol mask. The app lists exactly these seven,
-# in this order; bit 1 is never offered on the ports seen so far and so has no
-# name yet.
+# in this order. Bit 1 belongs to something this model has nothing to put in:
+# ticking every box the app offers for the 140 W port sets the mask to 0xFD,
+# which is these seven and not it. The slot is there in the protocol; the
+# X783 simply never fills it.
 CUSTOM_PROTOCOLS: Final[dict[int, str]] = {
     0: "Apple 5V/2.4A",
     2: "AFC",

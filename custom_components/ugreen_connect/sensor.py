@@ -416,6 +416,10 @@ class UgreenCustomLimitSensor(UgreenPortEntity, SensorEntity):
         group = self._group or {}
         return {
             "protocols": group.get("protocols") or [],
+            # The raw byte as well as the names read out of it: a bit nobody
+            # has put a name to yet would otherwise be invisible here, and
+            # this is the field that would show it.
+            "protocol_mask": group.get("mask"),
             "group": self._group_name,
         }
 
