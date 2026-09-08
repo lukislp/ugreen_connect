@@ -60,22 +60,28 @@
         "name": "Gesamtleistung"
       },
       "port_power": {
-        "name": "{port} Leistung"
+        "name": "Leistung"
       },
       "port_voltage": {
-        "name": "{port} Spannung"
+        "name": "Spannung"
       },
       "port_current": {
-        "name": "{port} Stromstärke"
+        "name": "Stromstärke"
       },
       "port_protocol": {
-        "name": "{port} Protokoll"
+        "name": "Protokoll"
       },
       "session_energy": {
-        "name": "{port} Energie des Ladevorgangs"
+        "name": "Energie des Ladevorgangs"
       },
       "session_charge": {
-        "name": "{port} Ladung des Ladevorgangs"
+        "name": "Ladung des Ladevorgangs"
+      },
+      "custom_limit": {
+        "name": "Grenze der Port-Anpassung"
+      },
+      "custom_limit_shared": {
+        "name": "Grenze der Port-Anpassung (geteilt mit {other})"
       }
     },
     "number": {
@@ -185,6 +191,11 @@
     "error": {
       "cannot_connect": "Die UGREEN-Cloud war nicht erreichbar.",
       "invalid_auth": "Konto oder Passwort wurde in dieser Region abgelehnt."
+    }
+  },
+  "exceptions": {
+    "mode_not_selectable": {
+      "message": "{mode} lässt sich nicht aus Home Assistant setzen. Der Modus braucht die Parameter, die nur der Modus-Editor der UgreenConnect-App füllt, und erfundene Werte würden überschreiben, was dort konfiguriert ist."
     }
   }
 }
