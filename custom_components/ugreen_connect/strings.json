@@ -91,6 +91,9 @@
       },
       "ssid": {
         "name": "Wi-Fi network"
+      },
+      "custom_mode_name": {
+        "name": "Custom mode"
       }
     },
     "number": {

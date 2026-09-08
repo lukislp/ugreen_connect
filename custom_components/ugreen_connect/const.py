@@ -134,6 +134,10 @@ CUSTOM_SHARED_STEP: Final = 15
 # elsewhere; the name says which other port the figure is shared with.
 CUSTOM_SHARED_GROUP: Final = "C6+A"
 CUSTOM_SHARED_MEMBERS: Final[dict[str, str]] = {"C6": "A1", "A1": "C6"}
+# The charger holds a custom mode's numbers but not what the owner called it;
+# the name lives in the account beside a copy of the same figures. Re-read on
+# a timer, since renaming one is a thing people do rarely and by hand.
+SMART_MODE_INTERVAL: Final = 900
 
 # Bit positions in a group's protocol mask. The app lists exactly these seven,
 # in this order. Bit 1 belongs to something this model has nothing to put in:
@@ -141,7 +145,7 @@ CUSTOM_SHARED_MEMBERS: Final[dict[str, str]] = {"C6": "A1", "A1": "C6"}
 # which is these seven and not it. The slot is there in the protocol; the
 # X783 simply never fills it.
 CUSTOM_PROTOCOLS: Final[dict[int, str]] = {
-    0: "Apple 5V/2.4A",
+    0: "Apple5V/2.4A",
     2: "AFC",
     3: "SCP",
     4: "UFCS",

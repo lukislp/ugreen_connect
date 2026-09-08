@@ -91,6 +91,9 @@
       },
       "ssid": {
         "name": "WLAN-Netz"
+      },
+      "custom_mode_name": {
+        "name": "Port-Anpassung"
       }
     },
     "number": {

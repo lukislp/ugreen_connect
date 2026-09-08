@@ -25,6 +25,7 @@ from .const import (
     CONF_IDLE_END,
     DEFAULT_IDLE_END,
     SESSION_GAP_FACTOR,
+    SMART_MODE_INTERVAL,
     STATIC_INFO_INTERVAL,
     WALLPAPER_LIST_INTERVAL,
     WALLPAPER_MISS_INTERVAL,
@@ -82,6 +83,7 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._static: dict[str, tuple[dict[str, Any], float]] = {}
         self._wallpaper_cache: dict[str, tuple[list[dict[str, Any]], float]] = {}
         self._wallpaper_missed: dict[str, float] = {}
+        self._modes: dict[str, tuple[list[dict[str, Any]], float]] = {}
         self._products: dict[str, Any] = {}
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -157,6 +159,9 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     power[key].update(await self.rtcx.async_device_state(iot_id) or {})
                     power[key].update(await self._static_info(key, iot_id))
                     power[key]["ota"] = self.rtcx.ota_state()
+                    power[key]["custom_name"] = await self._custom_mode_name(
+                        device, key, power[key].get("custom")
+                    )
                     # A picture uploaded from the phone app is on the charger the
                     # moment it is chosen, while the library was last read up to
                     # a quarter of an hour ago and has never heard of it. Seeing
@@ -215,6 +220,47 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         info = {k: v if v is not None else cached.get(k) for k, v in info.items()}
         self._static[key] = (info, time.time())
         return info
+
+    async def _custom_mode_name(
+        self, device: dict[str, Any], key: str, groups: list[dict[str, Any]] | None
+    ) -> str | None:
+        """What the owner called the custom mode the charger is running.
+
+        The charger carries the mode's numbers and not its name -- the name is
+        the account's, stored beside a copy of the same figures. So the mode is
+        recognised by matching those rather than assumed, which is what makes
+        this right for someone who keeps several.
+        """
+        if not groups:
+            return None
+        cached, fetched_at = self._modes.get(key, ([], 0.0))
+        if not cached or time.time() - fetched_at > SMART_MODE_INTERVAL:
+            try:
+                cached = await self.api.get_smart_modes(
+                    deviceUniqueCode=device["deviceUniqueCode"],
+                    productSerialNo=device["productSerialNo"],
+                ) or []
+            except (UgreenError, KeyError) as err:
+                _LOGGER.debug("smart modes for %s failed: %s", key, err)
+                return None
+            self._modes[key] = (cached, time.time())
+
+        limits = {group["port"]: group["limit"] for group in groups}
+        for mode in cached:
+            listed = {
+                port.get("portName"): port.get("portPower")
+                for port in mode.get("portList") or []
+            }
+            # A group set to nothing is left out of the account's copy, so it
+            # has to match by being absent rather than by being zero.
+            if all(limits.get(name) == watts for name, watts in listed.items()) and all(
+                not watts for name, watts in limits.items() if name not in listed
+            ):
+                return mode.get("modeName")
+        # The account may name a shared group differently from the frame, and
+        # then nothing matches. With one mode stored there is no ambiguity
+        # about which it is, so say its name rather than none at all.
+        return cached[0].get("modeName") if len(cached) == 1 else None
 
     async def _wallpapers(self, device: dict[str, Any]) -> list[dict[str, Any]]:
         """The pictures available for this charger, with preview URLs.

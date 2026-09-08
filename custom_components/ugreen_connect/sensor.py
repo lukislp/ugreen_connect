@@ -99,6 +99,7 @@ async def async_setup_entry(
                 new.append(UgreenTotalPowerSensor(coordinator, key))
                 new.append(UgreenChargerEnergySensor(coordinator, key))
                 new.append(UgreenSsidSensor(coordinator, key))
+                new.append(UgreenCustomModeNameSensor(coordinator, key))
             # Only once the charger has actually reported a custom mode: a
             # device that has never had one configured would otherwise carry
             # six entities that can never say anything.
@@ -273,6 +274,26 @@ class UgreenChargerEnergySensor(UgreenDeviceEntity, _UgreenEnergyTotal):
 
     def _delivered_wh(self) -> float:
         return self.coordinator.sessions.delivered_total(self._key)
+
+
+class UgreenCustomModeNameSensor(UgreenDeviceEntity, SensorEntity):
+    """What the owner called the custom charging mode in the app."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "custom_mode_name"
+    _attr_icon = "mdi:tune-variant"
+
+    def __init__(self, coordinator: UgreenCoordinator, key: str) -> None:
+        super().__init__(coordinator, key)
+        self._attr_unique_id = f"{key}_custom_mode_name"
+
+    @property
+    def available(self) -> bool:
+        return super().available and bool((self._reading or {}).get("custom_name"))
+
+    @property
+    def native_value(self) -> str | None:
+        return (self._reading or {}).get("custom_name")
 
 
 class UgreenSsidSensor(UgreenDeviceEntity, SensorEntity):
