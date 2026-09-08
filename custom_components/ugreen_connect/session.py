@@ -131,6 +131,10 @@ class SessionTracker:
         """Watt-hours this port has passed since the tracker was made."""
         return self._delivered.get((key, port), 0.0)
 
+    def delivered_total(self, key: str) -> float:
+        """The same for the whole charger, every port added up."""
+        return sum(wh for (device, _), wh in self._delivered.items() if device == key)
+
     def restore(self, key: str, port: str, saved: dict) -> None:
         """Take back a session saved before a restart.
 

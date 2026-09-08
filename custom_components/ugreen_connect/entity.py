@@ -103,8 +103,11 @@ class UgreenPortEntity(UgreenDeviceEntity):
         # added in the same batch and ahead of these, so it is already there --
         # and if it somehow is not, the port simply stands on its own until the
         # next start rather than failing to appear at all.
-        parent = async_get_device_registry(self.hass).async_get_device(
-            identifiers={(DOMAIN, self._key)}
+        # Looked up by identifier within this config entry: identifiers are no
+        # longer unique across entries, so the plain `async_get_device` cannot
+        # say which charger it found.
+        parent = async_get_device_registry(self.hass).async_get_device_by_identifier(
+            (DOMAIN, self._key), self.coordinator.config_entry.entry_id
         )
         if parent:
             info["via_device_id"] = parent.id
