@@ -154,6 +154,19 @@
       "charging": {
         "name": "Lädt"
       }
+    },
+    "event": {
+      "charging": {
+        "name": "Ladevorgang",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "started": "Begonnen",
+              "ended": "Beendet"
+            }
+          }
+        }
+      }
     }
   },
   "services": {
