@@ -192,8 +192,9 @@ def parse_custom_mode(body: bytes) -> list[dict[str, Any]] | None:
         15       C6 and A together, in 15 W steps -- their slider has three
         16..39   one U32 big-endian protocol bitmask per group, C1 first
 
-    A preset leaves the whole block at zero, which is how "no custom mode
-    configured" is told apart from a configured one that happens to be idle.
+    A preset leaves the whole block at zero -- checked by switching to one and
+    watching it go -- which is how "no custom mode configured" is told apart
+    from a configured one that merely happens to be idle.
     """
     if len(body) < STATE_CUSTOM_END:
         return None
