@@ -82,6 +82,9 @@
       },
       "custom_limit_shared": {
         "name": "Grenze der Port-Anpassung (geteilt mit {other})"
+      },
+      "last_poll": {
+        "name": "Letzte erfolgreiche Abfrage"
       }
     },
     "number": {
@@ -139,6 +142,11 @@
         "state": {
           "none": "Keines"
         }
+      }
+    },
+    "binary_sensor": {
+      "charging": {
+        "name": "Lädt"
       }
     }
   },
