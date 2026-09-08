@@ -8,11 +8,13 @@ from typing import Any
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import UgreenConfigEntry
 from .const import (
     CHARGING_MODES,
+    DOMAIN,
     CLOCK_STYLES,
     PICTURE_SETTLE_SECONDS,
     SELECTABLE_MODES,
@@ -75,11 +77,25 @@ class UgreenChargingMode(UgreenDeviceEntity, SelectEntity):
 
     _attr_translation_key = "charging_mode"
     _attr_icon = "mdi:ev-station"
-    _attr_options = list(SELECTABLE_MODES)
 
     def __init__(self, coordinator: UgreenCoordinator, key: str) -> None:
         super().__init__(coordinator, key)
         self._attr_unique_id = f"{key}_charging_mode"
+
+    @property
+    def options(self) -> list[str]:
+        """The presets, and whatever else the charger says it is running.
+
+        Only the presets can be set from here, but a select whose current
+        option is missing from its own list reads as `unknown` -- which says
+        nothing at all about a charger that is perfectly happy in a mode it
+        was given by the app. Reporting the mode and refusing to set it is
+        the lesser of the two.
+        """
+        mode = (self._reading or {}).get("charging_mode")
+        if mode and mode not in SELECTABLE_MODES:
+            return [*SELECTABLE_MODES, mode]
+        return list(SELECTABLE_MODES)
 
     @property
     def available(self) -> bool:
@@ -87,12 +103,19 @@ class UgreenChargingMode(UgreenDeviceEntity, SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        mode = (self._reading or {}).get("charging_mode")
-        # "custom" is a real device state but not something this can set, so it
-        # is reported and simply absent from the options.
-        return mode if mode in self._attr_options else None
+        return (self._reading or {}).get("charging_mode")
 
     async def async_select_option(self, option: str) -> None:
+        if option not in SELECTABLE_MODES:
+            # "custom" is a real mode and is reported as one, but setting it
+            # would mean sending the 35 parameter bytes the app's editor
+            # fills in, and inventing those would quietly overwrite whatever
+            # the owner configured there.
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="mode_not_selectable",
+                translation_placeholders={"mode": option},
+            )
         iot_id = self._iot_id
         if not iot_id or option not in MODE_VALUE:
             return

@@ -186,5 +186,10 @@
       "cannot_connect": "Could not reach the UGREEN cloud.",
       "invalid_auth": "The account or password was rejected in that region."
     }
+  },
+  "exceptions": {
+    "mode_not_selectable": {
+      "message": "{mode} cannot be set from Home Assistant. It needs the parameters that only the UgreenConnect app's own mode editor fills in, and sending invented ones would overwrite what is configured there."
+    }
   }
 }
