@@ -80,6 +80,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: UgreenConfigEntry) -> bo
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: UgreenConfigEntry) -> None:
+    """Reload when how this runs has changed -- and not when it has learned.
+
+    The entry is also written to when a charger's model is first read, so that
+    the next start already knows it. That is a note to self rather than a
+    setting, and reloading the integration over it would restart the poll that
+    just discovered it.
+    """
+    coordinator = getattr(entry, "runtime_data", None)
+    if coordinator is not None and entry.options == coordinator.options_seen:
+        return
     await hass.config_entries.async_reload(entry.entry_id)
 
 
