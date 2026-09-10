@@ -16,12 +16,12 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import UgreenApi, UgreenAuthError, UgreenError
 from .const import (
+    CONF_IDLE_END,
     DEBUG_DUMP_FILE,
+    DEFAULT_IDLE_END,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MIN_POLL_GAP,
-    CONF_IDLE_END,
-    DEFAULT_IDLE_END,
     SESSION_GAP_FACTOR,
     STATIC_INFO_INTERVAL,
     WALLPAPER_LIST_INTERVAL,
@@ -133,7 +133,11 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if key is None or not iot_id:
                 continue
             try:
-                power[key] = await self.rtcx.async_power(iot_id)
+                # productNo is the account API's name for the model, and it is
+                # what decides how many ports the report has and what they are
+                # called.
+                model = (self._products.get(key) or {}).get("productNo")
+                power[key] = await self.rtcx.async_power(iot_id, model)
                 if power[key] is None:
                     errors[key] = "device returned no usable PT_data frame"
                 else:
