@@ -50,7 +50,7 @@ e.g. `sensor.ugreen_nexode_pro_x783_c1_power`.
 
 | Entity | Notes |
 |---|---|
-| `sensor.<device>_c1_power` … `_dc_power` | one per port: C1–C6, A1, DC |
+| `sensor.<device>_c1_power` … | one per port the charger reports; a 300W's are C1–C6, A1, DC |
 | `sensor.<device>_c1_voltage`, `_c1_current` | same ports |
 | `sensor.<device>_c1_protocol` | negotiated fast-charge protocol: PD, PPS, QC, AFC, FCP, UFCS, AVS |
 | `sensor.<device>_c1_session_energy` | watt-hours delivered to whatever is plugged into that port now |
@@ -78,9 +78,11 @@ the next poll rather than assumed.
 cannot be selected here: it needs the 35 parameter bytes the presets leave at
 zero, which only the app's mode editor fills in.
 
-Ports are reported in the order `C1 C2 C3 C4 C5 C6 A1 DC`. A port keeps its
-entities once it has been seen, so unplugging a cable does not delete its
-history.
+A 300W reports its ports in the order `C1 C2 C3 C4 C5 C6 A1 DC`, and a 160W as
+`C-Cable C1 C2 A`; the order comes from a table keyed on `productNo`, and a
+model with no entry gets `P1..Pn` counted from the report's own length. A port
+keeps its entities once it has been seen, so unplugging a cable does not delete
+its history.
 
 ### Charging sessions
 
@@ -239,8 +241,8 @@ CRC:  CRC-16/MODBUS, low byte first
 
 Writing a query frame to `PT_data` (`thing/properties/set`) makes the device
 answer; the reply becomes the property's value, read back with
-`thing/properties/get/all`. `GET_POWER_INFO` (`0xAA 0x06`) answers with eight
-7-byte port records:
+`thing/properties/get/all`. `GET_POWER_INFO` (`0xAA 0x06`) answers with one
+7-byte record per port -- eight on a 300W, four on a 160W:
 
 | offset | field | encoding |
 |---|---|---|
@@ -319,9 +321,9 @@ fine.
 ## Contributing
 
 Issues and pull requests are welcome, especially from owners of other UGREEN
-chargers — the port table and the byte offsets in `const.py` and `rtcx.py` are
-specific to the 300W eight-port model and are the first thing another one will
-disagree about. A
+chargers — the port table in `protocol.py` covers the two models anyone has
+measured, and the byte offsets beside it are the 300W's, which is the first
+thing another model will disagree about. A
 diagnostics download (*Settings → Devices & Services → UGREEN Connect →
 Download diagnostics*) is the most useful thing to attach; it has credentials
 redacted.

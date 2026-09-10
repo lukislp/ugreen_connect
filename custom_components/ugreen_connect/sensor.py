@@ -38,7 +38,7 @@ from .entity import ONLINE, UgreenDeviceEntity
 from .protocol import HANDSHAKE_PROTOCOL
 from .session import Session, charge_mah
 
-# The report always carries all eight slots.
+# What each measurement is, for every port the report carries.
 MEASUREMENTS: dict[str, tuple[SensorDeviceClass, str, int]] = {
     "power": (SensorDeviceClass.POWER, UnitOfPower.WATT, 1),
     "voltage": (SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT, 1),

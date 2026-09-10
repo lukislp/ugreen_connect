@@ -49,6 +49,15 @@ from .const import (
     RTCX_TOKEN_MARGIN,
 )
 from .protocol import (
+    FRAME_QUERY,
+    FRAME_SETTING,
+    QUERY_GET_DEVICE_STATE,
+    QUERY_GET_POWER_INFO,
+    QUERY_GET_PRODUCT_VERSION,
+    SETTING_SET_BRIGHTNESS,
+    SETTING_SET_CHARGING_MODE,
+    SETTING_SET_SCREENSAVER,
+    SETTING_SET_SLEEP_TIME,
     build_frame,
     frame_body,
     parse_power_frame,
@@ -62,21 +71,6 @@ TIMEOUT = aiohttp.ClientTimeout(total=30)
 # app advertises in `x-ca-signature-headers`.
 SIGNED_HEADERS = ("x-ca-key", "x-ca-nonce", "x-ca-timestamp")
 
-FRAME_QUERY = 0xAA
-FRAME_NOTIFY = 0xEE
-FRAME_SETTING = 0x11
-
-QUERY_GET_DEVICE_STATE = 1
-QUERY_GET_SN = 5
-QUERY_GET_POWER_INFO = 6
-QUERY_GET_UPGRADE_STATUS = 7
-QUERY_GET_WIFI_SSID = 8
-QUERY_GET_PRODUCT_VERSION = 10
-
-SETTING_SET_BRIGHTNESS = 1
-SETTING_SET_SLEEP_TIME = 2
-SETTING_SET_CHARGING_MODE = 4
-SETTING_SET_SCREENSAVER = 5
 
 # The mode byte is followed by 35 parameter bytes; every preset leaves them zero
 # and only the app's "custom" mode fills them in.
@@ -106,11 +100,14 @@ class RtcxClient:
         self._lock = asyncio.Lock()
         # Last propertyMap seen, so OTA state can be read without another call.
         self.last_properties: dict[str, Any] = {}
-        # The last raw frame seen for each question asked, keyed "TYPE/CMD".
+        # The last raw frame seen for each question asked, per charger. Keyed
+        # by the device rather than globally: one client serves an account, so
+        # two chargers on it would otherwise share one dict and a diagnostics
+        # download for either would carry whichever was polled last.
         # Diagnostics hands these out: on a charger nobody here has, the decoded
         # values are only as good as offsets established on a different one, and
         # these bytes are what someone else can check them against.
-        self.last_frames: dict[str, str] = {}
+        self.last_frames: dict[str, dict[str, str]] = {}
         # Stable per-account, so the cloud sees one client rather than a new one
         # on every restart. The app uses "ANDRC_" + 12 hex.
         self._client_key = "ANDRC_" + hashlib.sha256(
@@ -286,7 +283,8 @@ class RtcxClient:
                 for name, entries in prop_map.items()
             }
             if value and frame_body(value, frame_type, cmd) is not None:
-                self.last_frames[f"{frame_type:02X}/{cmd}"] = value
+                seen = self.last_frames.setdefault(iot_id, {})
+                seen[f"{frame_type:02X}/{cmd}"] = value
                 return value
             _LOGGER.debug(
                 "PT_data is not the reply to 0x%02X/%d yet (try %d)",

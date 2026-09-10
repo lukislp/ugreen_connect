@@ -92,3 +92,22 @@ def test_a_frame_that_is_not_a_power_report_is_refused():
     # The property holds the last reply to any question, not only this one.
     state = "aa01003e00376400040000000000000000000000000000000000000000000000000000000000000000000000010100ffffffffffff024231364135353439423636311f91"
     assert p.parse_power_frame(state, "X783") is None
+
+
+def test_the_ambiguous_length_leans_low_and_says_so():
+    # 56 is eight ports with no protocol tail and seven with a full one. The
+    # frame cannot separate them; this answers seven.
+    assert len(p.ports_for(None, 56)) == 7
+    # And the repair that suggests itself -- letting the measurement count win
+    # on exact multiples of seven -- would break the charger this was written
+    # on: 63 is 7 x 9.
+    assert len(p.ports_for(None, 63)) == 8
+
+
+def test_only_frames_known_to_be_harmless_may_be_published():
+    # An allowlist, so a query added later does not travel by default. Two of
+    # the ones this client can send answer with the household's own details.
+    assert f"{p.FRAME_QUERY:02X}/{p.QUERY_GET_POWER_INFO}" in p.PUBLISHABLE_FRAMES
+    assert f"{p.FRAME_QUERY:02X}/{p.QUERY_GET_DEVICE_STATE}" in p.PUBLISHABLE_FRAMES
+    assert f"{p.FRAME_QUERY:02X}/{p.QUERY_GET_WIFI_SSID}" not in p.PUBLISHABLE_FRAMES
+    assert f"{p.FRAME_QUERY:02X}/{p.QUERY_GET_SN}" not in p.PUBLISHABLE_FRAMES

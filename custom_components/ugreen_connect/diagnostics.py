@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from . import UgreenConfigEntry
 from .coordinator import device_key
-from .protocol import FRAME_QUERY
+from .protocol import PUBLISHABLE_FRAMES
 
 # The README asks owners of other chargers to attach this file to a public
 # issue, so the bar it has to clear is not "no credentials" but "nothing that
@@ -34,18 +34,23 @@ TO_REDACT = {
     "ssid",
 }
 
-# Redacting by key name reaches values, and the raw frames are not values --
-# they are bytes. The reply to this one carries the household's Wi-Fi network
-# name as plain ASCII inside them, where nothing above can see it. Every other
-# frame is worth reading byte by byte; this one holds nothing a charger could
-# be debugged with.
-QUERY_GET_WIFI_SSID = 8
-SSID_FRAME = f"{FRAME_QUERY:02X}/{QUERY_GET_WIFI_SSID}"
-
 # Redaction only ever looks at values, and these sections are keyed by the
 # device code -- so the code redacted everywhere else would still be sitting
 # here in plain sight, as the key.
 KEYED_BY_DEVICE = ("detail", "power", "power_errors")
+
+
+def _publishable(coordinator: Any, iot_id: str | None) -> dict[str, str]:
+    """The frames this charger answered with that are safe to hand over.
+
+    An allowlist rather than a list of exclusions: the file is written to be
+    posted publicly, and a frame nobody has thought about should not travel by
+    default. Two of the queries this client can send answer with the household's
+    own details -- the Wi-Fi network name and the serial number, both as plain
+    ASCII inside the bytes, where redaction by key name never reaches.
+    """
+    seen = (coordinator.rtcx.last_frames.get(iot_id) or {}) if iot_id else {}
+    return {name: value for name, value in seen.items() if name in PUBLISHABLE_FRAMES}
 
 
 async def async_get_config_entry_diagnostics(
@@ -72,14 +77,18 @@ async def async_get_config_entry_diagnostics(
     return {
         "entry": async_redact_data(dict(entry.data), TO_REDACT),
         "data": data,
-        # The raw frames behind the readings above, keyed by the question that
-        # was asked. On a charger this integration has never seen, the decoded
-        # values are only as good as offsets established on a different one --
-        # these bytes are what someone else can check them against, and what
-        # turns "my ports are called P1" into a model in the table.
+        # The raw frames behind the readings above, per charger and keyed by
+        # the question that was asked. On a charger this integration has never
+        # seen, the decoded values are only as good as offsets established on a
+        # different one -- these bytes are what someone else can check them
+        # against, and what turns "my ports are called P1" into a model in the
+        # table.
         "frames": {
-            name: value
-            for name, value in coordinator.rtcx.last_frames.items()
-            if name != SSID_FRAME
+            names.get(key, key): _publishable(coordinator, iot_id)
+            for key, iot_id in (
+                (device_key(d), (d.get("extra") or {}).get("iotId"))
+                for d in raw.get("devices") or []
+            )
+            if key is not None
         },
     }
