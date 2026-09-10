@@ -12,12 +12,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import UgreenApi, UgreenAuthError, UgreenError
 from .const import (
     CONF_IDLE_END,
-    CONF_MODELS,
     DEBUG_DUMP_FILE,
     DEFAULT_IDLE_END,
     DEFAULT_SCAN_INTERVAL,
@@ -47,6 +47,8 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         rtcx: RtcxClient,
         *,
         debug_dump: bool = True,
+        models: dict[str, str] | None = None,
+        model_store: Store[dict[str, str]] | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -79,19 +81,17 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._wallpaper_cache: dict[str, tuple[list[dict[str, Any]], float]] = {}
         self._wallpaper_missed: dict[str, float] = {}
         self._products: dict[str, Any] = {}
-        # What the options looked like when this was built, so an entry written
-        # for any other reason can be told apart from one the user changed.
-        self.options_seen = dict(entry.options)
         # What the account API answered when asked which model a charger is.
         # A key here means it has answered; the value may still be None, which
         # is a model with no port table rather than a model not yet known.
         #
-        # Seeded from the entry, so a charger already known is known again at
-        # once: nothing to wait for on a cold start, and nothing for a bad
-        # minute on that endpoint to take away. The waiting only ever happens
-        # when somebody first adds a charger -- the one moment it cannot be
-        # avoided, and the one moment there is no history to lose.
-        self._models: dict[str, str | None] = dict(entry.data.get(CONF_MODELS) or {})
+        # Seeded from what was learned before, so a charger already known is
+        # known again at once: nothing to wait for on a cold start, and nothing
+        # for a bad minute on that endpoint to take away. The waiting only ever
+        # happens when somebody first adds a charger -- the one moment it
+        # cannot be avoided, and the one moment there is no history to lose.
+        self._models: dict[str, str | None] = dict(models or {})
+        self._model_store = model_store
         self._model_tries: dict[str, int] = {}
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -149,9 +149,8 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # nothing here catches.
             if isinstance(product, dict):
                 self._products[key] = product
-                self._models[key] = model = product.get("productNo")
-                if model:
-                    self._remember(key, model)
+                self._models[key] = product.get("productNo")
+                self._remember()
                 continue
             tries = self._model_tries[key] = self._model_tries.get(key, 0) + 1
             if tries >= MODEL_LOOKUP_ATTEMPTS or not serial:
@@ -230,20 +229,17 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return data
 
-    def _remember(self, key: str, model: str) -> None:
-        """Write a model into the entry, so the next start already knows it.
+    def _remember(self) -> None:
+        """Keep what has been learned, so the next start already knows it.
 
-        Only a real answer is kept. A charger the API has no model for is left
-        to ask again next time, since "we have not been told" is a state that
-        can still change -- unlike the model of a charger, which cannot.
+        Only real answers are written. A charger the API has no model for is
+        left to ask again next time, since "we have not been told" is a state
+        that can still change -- unlike the model of a charger, which cannot.
         """
-        known = dict(self.config_entry.data.get(CONF_MODELS) or {})
-        if known.get(key) == model:
+        if self._model_store is None:
             return
-        known[key] = model
-        self.hass.config_entries.async_update_entry(
-            self.config_entry,
-            data={**self.config_entry.data, CONF_MODELS: known},
+        self._model_store.async_delay_save(
+            lambda: {key: name for key, name in self._models.items() if name}, 1
         )
 
     async def _static_info(self, key: str, iot_id: str) -> dict[str, Any]:

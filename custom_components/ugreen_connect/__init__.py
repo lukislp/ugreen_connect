@@ -9,6 +9,7 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 
 from .api import UgreenApi, UgreenAuthError, UgreenError
 from .const import (
@@ -16,6 +17,8 @@ from .const import (
     CONF_REGION,
     DEFAULT_LANGUAGE,
     DEFAULT_REGION,
+    MODEL_STORE_KEY,
+    MODEL_STORE_VERSION,
     REGIONS,
 )
 from .coordinator import UgreenCoordinator
@@ -63,8 +66,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: UgreenConfigEntry) -> bo
     except UgreenError as err:
         _LOGGER.warning("RTCX gateway unavailable, live power disabled: %s", err)
 
+    # What each charger was last found to be. Read before the first poll, so a
+    # charger already known is named from the start rather than waited for.
+    store: Store[dict[str, str]] = Store(
+        hass, MODEL_STORE_VERSION, f"{MODEL_STORE_KEY}.{entry.entry_id}"
+    )
     coordinator = UgreenCoordinator(
-        hass, entry, api, rtcx, debug_dump=entry.data.get(CONF_DEBUG_DUMP, False)
+        hass,
+        entry,
+        api,
+        rtcx,
+        debug_dump=entry.data.get(CONF_DEBUG_DUMP, False),
+        models=await store.async_load() or {},
+        model_store=store,
     )
     await coordinator.async_config_entry_first_refresh()
 
@@ -80,19 +94,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: UgreenConfigEntry) -> bo
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: UgreenConfigEntry) -> None:
-    """Reload when how this runs has changed -- and not when it has learned.
+    """Anything written to the entry is a choice, so it always takes a reload.
 
-    The entry is also written to when a charger's model is first read, so that
-    the next start already knows it. That is a note to self rather than a
-    setting, and reloading the integration over it would restart the poll that
-    just discovered it.
+    The region and the debug flag are read out of `entry.data` when this is set
+    up and nowhere else; the poll interval out of `entry.options` when the
+    coordinator is built. None of them can change without one.
     """
-    coordinator = getattr(entry, "runtime_data", None)
-    if coordinator is not None and entry.options == coordinator.options_seen:
-        return
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: UgreenConfigEntry) -> bool:
     """Unload a config entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: UgreenConfigEntry) -> None:
+    """Take the remembered models with the account they belong to."""
+    store: Store[dict[str, str]] = Store(
+        hass, MODEL_STORE_VERSION, f"{MODEL_STORE_KEY}.{entry.entry_id}"
+    )
+    await store.async_remove()
