@@ -84,17 +84,6 @@ PT_DATA_MAX_AGE: Final = 300
 # what the app uploads is this way round.
 WALLPAPER_SIZE: Final[tuple[int, int]] = (560, 170)
 
-# Port order of the power report on the Nexode Pro 300W, from the app's own port
-# table. X783 is what the app calls that model internally, and is kept here
-# because a second model would need its own list beside this one.
-X783_PORTS: Final[tuple[str, ...]] = ("C1", "C2", "C3", "C4", "C5", "C6", "A1", "DC")
-
-# The charging protocol each port negotiated, reported one byte per port at the
-# tail of the power frame.
-HANDSHAKE_PROTOCOL: Final[dict[int, str]] = {
-    0: "none", 1: "QC", 2: "AFC", 3: "FCP", 4: "UFCS", 5: "PD", 6: "PPS", 7: "AVS",
-}
-
 # Firmware version and SSID never change between polls; re-read them rarely.
 STATIC_INFO_INTERVAL: Final = 3600
 

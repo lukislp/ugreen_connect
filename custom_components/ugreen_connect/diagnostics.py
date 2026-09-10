@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from . import UgreenConfigEntry
 from .coordinator import device_key
+from .protocol import FRAME_QUERY
 
 # The README asks owners of other chargers to attach this file to a public
 # issue, so the bar it has to clear is not "no credentials" but "nothing that
@@ -32,6 +33,14 @@ TO_REDACT = {
     "iotId",
     "ssid",
 }
+
+# Redacting by key name reaches values, and the raw frames are not values --
+# they are bytes. The reply to this one carries the household's Wi-Fi network
+# name as plain ASCII inside them, where nothing above can see it. Every other
+# frame is worth reading byte by byte; this one holds nothing a charger could
+# be debugged with.
+QUERY_GET_WIFI_SSID = 8
+SSID_FRAME = f"{FRAME_QUERY:02X}/{QUERY_GET_WIFI_SSID}"
 
 # Redaction only ever looks at values, and these sections are keyed by the
 # device code -- so the code redacted everywhere else would still be sitting
@@ -63,4 +72,14 @@ async def async_get_config_entry_diagnostics(
     return {
         "entry": async_redact_data(dict(entry.data), TO_REDACT),
         "data": data,
+        # The raw frames behind the readings above, keyed by the question that
+        # was asked. On a charger this integration has never seen, the decoded
+        # values are only as good as offsets established on a different one --
+        # these bytes are what someone else can check them against, and what
+        # turns "my ports are called P1" into a model in the table.
+        "frames": {
+            name: value
+            for name, value in coordinator.rtcx.last_frames.items()
+            if name != SSID_FRAME
+        },
     }

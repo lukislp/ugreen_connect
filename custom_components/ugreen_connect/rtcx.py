@@ -43,12 +43,15 @@ from .const import (
     CHARGING_MODES,
     GATEWAY_LANGUAGE,
     GATEWAY_OK,
-    HANDSHAKE_PROTOCOL,
     POWER_POLL_ATTEMPTS,
     POWER_SETTLE_SECONDS,
     PT_DATA_MAX_AGE,
     RTCX_TOKEN_MARGIN,
-    X783_PORTS,
+)
+from .protocol import (
+    build_frame,
+    frame_body,
+    parse_power_frame,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -79,10 +82,6 @@ SETTING_SET_SCREENSAVER = 5
 # and only the app's "custom" mode fills them in.
 CHARGING_MODE_PARAMS = 35
 
-# One 7-byte record per port, then one handshake-protocol byte per port.
-PORT_RECORD = 7
-PORT_COUNT = 8
-POWER_BODY_MIN = PORT_RECORD * PORT_COUNT
 
 # Offsets into the GET_DEVICE_STATE reply. Each was confirmed by writing a
 # distinctive value and reading it back, not inferred.
@@ -93,78 +92,6 @@ STATE_SCREENSAVER = 40  # then theme at 41 and a further flag at 42
 STATE_IMAGE_ID = 43  # six ASCII bytes naming the wallpaper in use
 STATE_WALLPAPER_COUNT = 49  # then that many six-byte ids
 IMAGE_ID_LEN = 6
-
-
-def crc16_modbus(data: bytes) -> int:
-    """CRC-16/MODBUS, the checksum the charger's frames carry."""
-    crc = 0xFFFF
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
-    return crc
-
-
-def build_frame(frame_type: int, cmd: int, payload: bytes = b"\x00") -> str:
-    """Encode one protocol frame as the uppercase hex string ``PT_data`` wants."""
-    body = bytes((frame_type, cmd)) + len(payload).to_bytes(2, "big") + payload
-    return (body + crc16_modbus(body).to_bytes(2, "little")).hex().upper()
-
-
-def frame_body(value: str, frame_type: int, cmd: int) -> bytes | None:
-    """Return a frame's payload if it is the reply we asked for and the CRC holds."""
-    try:
-        raw = bytes.fromhex(value)
-    except ValueError:
-        _LOGGER.debug("PT_data is not hex: %r", value)
-        return None
-    if len(raw) < 6:
-        return None
-    length = int.from_bytes(raw[2:4], "big")
-    body = raw[4 : 4 + length]
-    if len(body) != length:
-        return None
-    if crc16_modbus(raw[: 4 + length]) != int.from_bytes(
-        raw[4 + length : 6 + length], "little"
-    ):
-        _LOGGER.debug("PT_data CRC mismatch: %s", value)
-        return None
-    if raw[0] != frame_type or raw[1] != cmd:
-        return None
-    return body
-
-
-def parse_power_frame(value: str) -> dict[str, dict[str, Any]] | None:
-    """Decode a ``GET_POWER_INFO`` reply into ``{port_name: {volt, amp, watt}}``.
-
-    Returns None for anything else -- the property also holds replies to other
-    commands, and the last one simply stays there until the device sends a new.
-    """
-    body = frame_body(value, FRAME_QUERY, QUERY_GET_POWER_INFO)
-    if body is None:
-        return None
-    if len(body) < POWER_BODY_MIN:
-        _LOGGER.debug("power body too short: %d < %d", len(body), POWER_BODY_MIN)
-        return None
-
-    def u16(offset: int) -> int:
-        return int.from_bytes(body[offset : offset + 2], "big")
-
-    ports: dict[str, dict[str, Any]] = {}
-    for index, name in enumerate(X783_PORTS):
-        base = PORT_RECORD * index
-        # The protocol byte block follows the port records; a port that has
-        # nothing attached reports 0 ("none").
-        proto_at = POWER_BODY_MIN + index
-        ports[name] = {
-            "voltage": u16(base) / 10,
-            "current": u16(base + 2) / 10,
-            "power": u16(base + 4) / 10,
-            "protocol": HANDSHAKE_PROTOCOL.get(
-                body[proto_at] if len(body) > proto_at else 0, "unknown"
-            ),
-        }
-    return ports
 
 
 class RtcxClient:
@@ -179,6 +106,11 @@ class RtcxClient:
         self._lock = asyncio.Lock()
         # Last propertyMap seen, so OTA state can be read without another call.
         self.last_properties: dict[str, Any] = {}
+        # The last raw frame seen for each question asked, keyed "TYPE/CMD".
+        # Diagnostics hands these out: on a charger nobody here has, the decoded
+        # values are only as good as offsets established on a different one, and
+        # these bytes are what someone else can check them against.
+        self.last_frames: dict[str, str] = {}
         # Stable per-account, so the cloud sees one client rather than a new one
         # on every restart. The app uses "ANDRC_" + 12 hex.
         self._client_key = "ANDRC_" + hashlib.sha256(
@@ -354,6 +286,7 @@ class RtcxClient:
                 for name, entries in prop_map.items()
             }
             if value and frame_body(value, frame_type, cmd) is not None:
+                self.last_frames[f"{frame_type:02X}/{cmd}"] = value
                 return value
             _LOGGER.debug(
                 "PT_data is not the reply to 0x%02X/%d yet (try %d)",
@@ -497,14 +430,16 @@ class RtcxClient:
             iot_id, SETTING_SET_SCREENSAVER, bytes([1 if enabled else 0, theme, flag]) + image
         )
 
-    async def async_power(self, iot_id: str) -> dict[str, Any] | None:
+    async def async_power(
+        self, iot_id: str, model: str | None = None
+    ) -> dict[str, Any] | None:
         """Ask the charger for a power report and read the answer back.
 
         The device replies asynchronously: the write only queues the query, and
         the reply shows up as the property's new value a moment later.
         """
         value = await self._ask(iot_id, FRAME_QUERY, QUERY_GET_POWER_INFO)
-        ports = parse_power_frame(value) if value else None
+        ports = parse_power_frame(value, model) if value else None
         if ports is None:
             return None
         return {
