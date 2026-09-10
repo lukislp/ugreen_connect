@@ -80,6 +80,17 @@ POWER_POLL_ATTEMPTS: Final = 3
 # treated as "no reading" rather than as a live one.
 PT_DATA_MAX_AGE: Final = 300
 
+# How many times the product lookup may come back empty before the ports are
+# numbered instead of named.
+#
+# The model decides what a port is called, and a name that changes later means
+# a second set of entities beside the first, with the history left behind on
+# the old ones. So a charger whose model is not known yet is left alone for a
+# poll rather than published under names that may be taken back -- but not
+# forever: if that endpoint is simply down, numbered ports beat no ports, and
+# the decision then stays put.
+MODEL_LOOKUP_ATTEMPTS: Final = 3
+
 # The charger's screen, in pixels. Its stock pictures are stored rotated, but
 # what the app uploads is this way round.
 WALLPAPER_SIZE: Final[tuple[int, int]] = (560, 170)

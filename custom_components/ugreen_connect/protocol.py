@@ -18,7 +18,39 @@ from typing import Any, Final
 _LOGGER = logging.getLogger(__name__)
 
 FRAME_QUERY = 0xAA
+FRAME_NOTIFY = 0xEE
+FRAME_SETTING = 0x11
+
+QUERY_GET_DEVICE_STATE = 1
+QUERY_GET_SN = 5
 QUERY_GET_POWER_INFO = 6
+QUERY_GET_UPGRADE_STATUS = 7
+QUERY_GET_WIFI_SSID = 8
+QUERY_GET_PRODUCT_VERSION = 10
+
+SETTING_SET_BRIGHTNESS = 1
+SETTING_SET_SLEEP_TIME = 2
+SETTING_SET_CHARGING_MODE = 4
+SETTING_SET_SCREENSAVER = 5
+
+# Which frames a diagnostics download may carry, as an allowlist rather than a
+# list of the ones to leave out.
+#
+# The direction matters more than the contents. That file is written to be
+# posted publicly, and a denylist publishes anything added here later by
+# default -- while two of the queries above answer with the household's own
+# details: the Wi-Fi network name in plain ASCII, and the serial number the
+# redaction elsewhere goes to some trouble to remove. Forgetting to add a frame
+# here costs a reader some bytes; forgetting to exclude one costs somebody
+# their network name.
+PUBLISHABLE_FRAMES: Final[frozenset[str]] = frozenset(
+    f"{FRAME_QUERY:02X}/{cmd}"
+    for cmd in (
+        QUERY_GET_DEVICE_STATE,
+        QUERY_GET_POWER_INFO,
+        QUERY_GET_PRODUCT_VERSION,
+    )
+)
 
 # One 7-byte record per port, then up to one handshake-protocol byte per port.
 PORT_RECORD = 7
@@ -41,9 +73,6 @@ PORTS_BY_MODEL: Final[dict[str, tuple[str, ...]]] = {
     "X776": ("C-Cable", "C1", "C2", "A"),
 }
 
-# The name the rest of the integration knew the 300W's list by.
-X783_PORTS: Final[tuple[str, ...]] = PORTS_BY_MODEL["X783"]
-
 
 def ports_for(model: str | None, body_length: int) -> tuple[str, ...]:
     """What to call each port of a report this long, on this model.
@@ -60,6 +89,15 @@ def ports_for(model: str | None, body_length: int) -> tuple[str, ...]:
     28 and four, with nothing left off. So the count is taken as high as the
     protocol block allows and no higher than the measurements can fill, which
     reads both shapes without having to know which it is looking at.
+
+    One length is genuinely undecidable: 56 is eight ports with no protocol
+    tail and seven ports with a full one, and nothing in the frame separates
+    them. This answers seven, and a model table is the only thing that could
+    answer better.
+
+    Resist the obvious repair. Letting the measurement count win on exact
+    multiples of seven looks like it settles 56 and breaks 63 instead, which
+    is 7 x 9: the X783 would come back with nine ports.
     """
     if known := PORTS_BY_MODEL.get(model or ""):
         return known

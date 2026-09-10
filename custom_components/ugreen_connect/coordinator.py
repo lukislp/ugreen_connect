@@ -22,12 +22,14 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MIN_POLL_GAP,
+    MODEL_LOOKUP_ATTEMPTS,
     SESSION_GAP_FACTOR,
     STATIC_INFO_INTERVAL,
     WALLPAPER_LIST_INTERVAL,
     WALLPAPER_MISS_INTERVAL,
 )
-from .rtcx import QUERY_GET_WIFI_SSID, RtcxClient
+from .protocol import QUERY_GET_WIFI_SSID
+from .rtcx import RtcxClient
 from .session import MAX_GAP, SessionTracker
 
 _LOGGER = logging.getLogger(__name__)
@@ -76,6 +78,11 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._wallpaper_cache: dict[str, tuple[list[dict[str, Any]], float]] = {}
         self._wallpaper_missed: dict[str, float] = {}
         self._products: dict[str, Any] = {}
+        # What the account API answered when asked which model a charger is.
+        # A key here means it has answered; the value may still be None, which
+        # is a model with no port table rather than a model not yet known.
+        self._models: dict[str, str | None] = {}
+        self._model_tries: dict[str, int] = {}
 
     async def _async_update_data(self) -> dict[str, Any]:
         started = time.monotonic()
@@ -111,16 +118,37 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except UgreenError as err:
             raise UpdateFailed(str(err)) from err
 
-        # Product metadata rarely changes, so it is fetched once and cached.
+        # Product metadata rarely changes, so it is fetched once and kept --
+        # but only once it has actually arrived. An empty answer used to be
+        # cached like any other, which stopped the retry and left the charger
+        # numbered for the life of the process.
         for device in devices:
             serial = device.get("productSerialNo")
             key = device_key(device)
-            if key is None or not serial or key in self._products:
+            if key is None or key in self._models:
                 continue
-            try:
-                self._products[key] = await self.api.get_product_model(serialNo=serial)
-            except UgreenError as err:
-                _LOGGER.debug("product model for %s failed: %s", serial, err)
+            product: Any = None
+            if serial:
+                try:
+                    product = await self.api.get_product_model(serialNo=serial)
+                except UgreenError as err:
+                    _LOGGER.debug("product model for %s failed: %s", serial, err)
+            # The payload is whatever the cloud put in `data`, which has been
+            # seen as something other than a mapping -- and a model read out of
+            # a list would take the whole poll down with an AttributeError that
+            # nothing here catches.
+            if isinstance(product, dict):
+                self._products[key] = product
+                self._models[key] = product.get("productNo")
+                continue
+            tries = self._model_tries[key] = self._model_tries.get(key, 0) + 1
+            if tries >= MODEL_LOOKUP_ATTEMPTS or not serial:
+                _LOGGER.warning(
+                    "No model for %s after %d attempts; its ports will be "
+                    "numbered rather than named",
+                    key, tries,
+                )
+                self._models[key] = None
 
         # Live readings come from a different cloud (the RTCX gateway) and are
         # per-device, so a failure there must not take the inventory down with
@@ -132,11 +160,19 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             iot_id = (device.get("extra") or {}).get("iotId")
             if key is None or not iot_id:
                 continue
+            if key not in self._models:
+                # Not "this model has no table" -- "nobody has told us yet".
+                # Those arrive at the parser as the same `None`, and only one of
+                # them should produce P1..Pn. Waiting a poll costs a few
+                # seconds; guessing costs a duplicate set of entities that keeps
+                # the history of neither.
+                _LOGGER.debug("waiting for the model of %s before naming ports", key)
+                continue
             try:
                 # productNo is the account API's name for the model, and it is
                 # what decides how many ports the report has and what they are
                 # called.
-                model = (self._products.get(key) or {}).get("productNo")
+                model = self._models[key]
                 power[key] = await self.rtcx.async_power(iot_id, model)
                 if power[key] is None:
                     errors[key] = "device returned no usable PT_data frame"
