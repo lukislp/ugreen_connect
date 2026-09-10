@@ -153,3 +153,13 @@ PICTURE_SETTLE_SECONDS: Final = 5
 # from -- see the integration README.
 DEBUG_DUMP_FILE: Final = "ugreen_connect_debug.json"
 CONF_DEBUG_DUMP: Final = "debug_dump"
+
+# Which model each charger is, once the account API has said so, kept in the
+# config entry rather than learned again on every start.
+#
+# A charger does not become a different model, and the answer decides what its
+# ports are called -- which decides their unique ids. Paying the lookup again
+# on every restart leaves a hole exactly where it hurts: a charger with a year
+# of history, restarted while that endpoint is having a bad minute, would spend
+# its attempts and come back numbered beside the names it has always had.
+CONF_MODELS: Final = "models"
