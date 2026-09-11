@@ -413,3 +413,58 @@ def test_the_lifetime_total_is_the_sum_of_the_bouts():
     assert bouts > 0
     assert tracker.delivered_total("dev") == pytest.approx(bouts)
 
+
+def test_charge_stops_flowing_long_before_the_bout_is_over():
+    """Two questions, two answers, minutes to hours apart.
+
+    `active` keeps a bout together for accounting: a phone sipping at 100%
+    belongs in the same session rather than fragmenting the milliamp-hour
+    figure, so it stays true for the whole idle window. A battery_charging
+    sensor promises something else entirely -- reading "charging" for two hours
+    after the charger stopped delivering is accurate about the bout and wrong
+    about the question asked.
+    """
+    tracker = SessionTracker()
+    now = 1000.0
+    for _step in range(12):
+        tracker.update(now, "dev", {"C1": {"voltage": 9.0, "current": 2.2,
+                                           "power": 20.0, "protocol": "PD"}})
+        now += 5
+    session = tracker.session("dev", "C1")
+    assert session.delivering is True
+    assert session.active is True
+
+    quiet = {"C1": {"voltage": 9.0, "current": 0.0, "power": 0.0, "protocol": "PD"}}
+    # Measured from the last reading that carried current, which is one poll
+    # before the quiet begins.
+    last_draw = session.last_draw
+    while now - last_draw < session_module.DRAW_SETTLE:
+        tracker.update(now, "dev", quiet)
+        now += 5
+    # Still inside the settle: one missed poll must not toggle the sensor.
+    assert session.delivering is True
+
+    tracker.update(now, "dev", quiet)
+    assert session.delivering is False
+    # And the bout is still open, which is the whole point of the separation.
+    assert session.active is True
+
+
+def test_the_two_windows_cannot_meet():
+    """The separation the split rests on, asserted rather than assumed.
+
+    `delivering` answers "is charge flowing" and `active` answers "is this bout
+    over". They are the same predicate with different patience, and the whole
+    reason for two of them is that the patience differs by orders of magnitude.
+    Bring them together and the battery sensor silently becomes the thing it
+    replaced -- true for as long as the bout, which was the bug.
+
+    The bound is the smallest window the options dialog allows, not a number
+    picked here: the settle has to be shorter than any bout anybody can
+    configure, or the two would collide on somebody's real settings.
+    """
+    # The shortest bout the options dialog allows, in seconds.
+    shortest_bout = 5 * 60
+    assert shortest_bout > session_module.DRAW_SETTLE
+    assert session_module.IDLE_END > session_module.DRAW_SETTLE
+
