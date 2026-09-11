@@ -186,5 +186,10 @@
       "cannot_connect": "Die UGREEN-Cloud war nicht erreichbar.",
       "invalid_auth": "Konto oder Passwort wurde in dieser Region abgelehnt."
     }
+  },
+  "exceptions": {
+    "not_writable_on_model": {
+      "message": "Das Setzen wurde am {model} nie überprüft, deshalb wird der Wert angezeigt, aber nicht geschrieben. Ändern lässt er sich in der UGREEN-App."
+    }
   }
 }
