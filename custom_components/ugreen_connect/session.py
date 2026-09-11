@@ -216,6 +216,34 @@ class SessionTracker:
                     state = self._restart(key, port)
                     before = state.energy_wh
                 self._advance(now, state, protocol, values)
+            # Derived here rather than set in each branch, because every branch
+            # had to agree and one of them did not: clearing it the moment a
+            # reading came back empty made a single `none` frame mid-charge --
+            # which this charger emits while a device renegotiates, and which
+            # UNPLUG_DEBOUNCE exists for -- flip the sensor off and on again.
+            # Reading it off last_draw gives delivery the same patience the
+            # bout already had, and carries it across a restart for free, since
+            # last_draw is in as_dict and delivering never was.
+            #
+            # Gated on the bout as well as the clock, because last_draw outlives
+            # the bout it belonged to: a restored session whose port is empty
+            # is finished on the first poll and keeps its timestamp, and
+            # without this the second poll would read that as current having
+            # flowed recently and turn the sensor on for an empty port.
+            #
+            # It also keeps a slow poll honest without a second rule. A blip is
+            # only worth protecting against when it is a small share of the
+            # samples: at a five-second interval the reading after one is still
+            # seconds from the last current, so this stays true; at fifteen
+            # minutes the first empty reading is already a whole period past it
+            # and this goes false at once, where a rule that counted readings
+            # would wait for the second and hold the sensor on for half an hour
+            # after the cable was pulled.
+            state.delivering = (
+                state.active
+                and state.last_draw is not None
+                and now - state.last_draw < DRAW_SETTLE
+            )
             # Whatever the session just gained, the lifetime total gains too.
             # Taken around the whole dispatch rather than around _advance alone:
             # a bout does not stop delivering the moment it stops drawing, and
@@ -248,7 +276,6 @@ class SessionTracker:
         state.peak_w = max(state.peak_w, power)
         self._integrate(now, state, power)
         state.last_draw = now
-        state.delivering = True
 
     def _quiet(self, now: float, state: Session) -> None:
         """The port is live but nothing is flowing: time the pause, end the bout if it lasts."""
@@ -257,8 +284,6 @@ class SessionTracker:
             # Only a cable so far, as far as anyone can tell. Nothing to time.
             return
         self._integrate(now, state, 0.0)
-        if state.last_draw is not None and now - state.last_draw >= DRAW_SETTLE:
-            state.delivering = False
         if (
             state.active
             and state.last_draw is not None
@@ -276,33 +301,20 @@ class SessionTracker:
         state.last_power = power
 
     def _empty(self, now: float, state: Session) -> None:
-        """An empty reading: stop delivering, note when it started, end the bout if it holds."""
-        first = state.empty_since is None
-        if first:
+        """An empty reading: note when it started, and end the session if it holds."""
+        if state.empty_since is None:
             state.empty_since = now
             if state.started_at is not None and state.ended_at is None:
                 state.ended_at = state.last_draw if state.last_draw is not None else now
         elif now - state.empty_since >= UNPLUG_DEBOUNCE:
             state.active = False
 
-        # One empty reading can be the renegotiation blip the charger produces
-        # mid handshake -- the reason UNPLUG_DEBOUNCE exists -- so a single one
-        # does not by itself mean charge stopped. Two in a row does.
-        #
-        # Unless current has already been absent longer than the settle, which
-        # is the same thing `_quiet` asks next door. That second clause is what
-        # keeps a slow poll honest: the first empty reading arrives one whole
-        # period after the last drawing one, so on a fifteen-minute interval
-        # waiting for a second would hold the sensor on for three quarters of an
-        # hour after the cable was pulled -- and a two-second blip sampled that
-        # rarely is not worth protecting against anyway. Below the settle the
-        # blip is a real share of the samples and the first clause governs;
-        # above it, this behaves exactly as it did before the guard existed.
-        if not first or state.last_draw is None or now - state.last_draw >= DRAW_SETTLE:
-            state.delivering = False
-
     def _finish(self, now: float, state: Session) -> None:
         state.active = False
+        # Redundant three ways -- the flag defaults False, `as_dict` omits it
+        # and `restore()` never passes it -- and all three live in other places.
+        # Should it ever join `as_dict`, a restored True would survive this and
+        # the empty-port flap would come back by another road.
         state.delivering = False
         if state.ended_at is None and state.started_at is not None:
             state.ended_at = state.last_draw if state.last_draw is not None else now

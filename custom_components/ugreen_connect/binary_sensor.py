@@ -68,6 +68,14 @@ class UgreenChargingSensor(UgreenDeviceEntity, BinarySensorEntity):
         return self.coordinator.sessions.session(self._key, self._port)
 
     @property
+    def available(self) -> bool:
+        # The power sensors of the same port go unavailable when a reading does
+        # not arrive, and this has to go with them: a charging state held over
+        # from before an outage is asserted rather than merely stale, and the
+        # longer it holds the more confidently it is wrong.
+        return super().available and self._reading is not None
+
+    @property
     def is_on(self) -> bool:
         session = self._session
         return bool(session and session.delivering)
