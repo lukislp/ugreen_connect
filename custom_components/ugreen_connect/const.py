@@ -37,6 +37,21 @@ MIN_SCAN_INTERVAL: Final = 5
 # measured start-to-start, so when a poll already overruns the configured
 # period this is what stops it becoming a back-to-back loop against the cloud.
 MIN_POLL_GAP: Final = 1.0
+
+# What to do when nothing is charging. Polling somebody else's cloud is this
+# integration's whole running cost, and a charger with nothing plugged into it
+# has nothing to say that anyone is watching for. The rate goes back up the
+# moment a port draws again, or a poll fails -- an outage is precisely when
+# someone is waiting for the charger to come back.
+IDLE_SCAN_FACTOR: Final = 6
+IDLE_SCAN_MAX: Final = 60
+
+# The screen settings and the charging mode only change when someone opens the
+# app, and asking for them costs a round trip of its own. Read once a minute
+# rather than beside every wattage -- except right after a write, when the copy
+# is known to be out of date and waiting out the timer would mean watching your
+# own change take a minute to appear.
+DEVICE_STATE_INTERVAL: Final = 60
 MAX_SCAN_INTERVAL: Final = 900
 
 # --- Charging sessions ------------------------------------------------------

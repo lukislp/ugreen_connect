@@ -21,7 +21,10 @@ from .const import (
     DEBUG_DUMP_FILE,
     DEFAULT_IDLE_END,
     DEFAULT_SCAN_INTERVAL,
+    DEVICE_STATE_INTERVAL,
     DOMAIN,
+    IDLE_SCAN_FACTOR,
+    IDLE_SCAN_MAX,
     MIN_POLL_GAP,
     MODEL_LOOKUP_ATTEMPTS,
     RETAIN_MISSES,
@@ -34,6 +37,7 @@ from .const import (
 from .protocol import QUERY_GET_WIFI_SSID
 from .rtcx import RtcxClient
 from .session import MAX_GAP, SessionTracker
+from .session import _drawing as port_drawing
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,6 +83,11 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._debug_dump = debug_dump
         self._dumped = False
         self._power_errors: dict[str, str] = {}
+        # Whether the last poll found any port drawing, which decides how soon
+        # the next one is due.
+        self._drawing = True
+        # The screen settings, per charger, and when they were last read.
+        self._state: dict[str, tuple[dict[str, Any], float]] = {}
         # The last reading that arrived whole, per charger, and how many polls
         # have come up empty since.
         self._good: dict[str, tuple[dict[str, Any], float]] = {}
@@ -121,7 +130,12 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         a slow or silent device from turning that into back-to-back requests,
         which is the one way this could make things worse rather than better.
         """
-        gap = max(MIN_POLL_GAP, self._target_period - elapsed)
+        period = self._target_period
+        if not self._drawing:
+            period = min(period * IDLE_SCAN_FACTOR, IDLE_SCAN_MAX)
+            # ...unless the owner already asked for something slower.
+            period = max(period, self._target_period)
+        gap = max(MIN_POLL_GAP, period - elapsed)
         wanted = timedelta(seconds=gap)
         if self.update_interval != wanted:
             self.update_interval = wanted
@@ -195,7 +209,7 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     errors[key] = "device returned no usable PT_data frame"
                     power[key] = self._carry(key)
                 else:
-                    power[key].update(await self.rtcx.async_device_state(iot_id) or {})
+                    power[key].update(await self._device_state(key, iot_id))
                     power[key].update(await self._static_info(key, iot_id))
                     power[key]["ota"] = self.rtcx.ota_state()
                     # A picture uploaded from the phone app is on the charger the
@@ -220,6 +234,29 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 errors[key] = str(err)
                 power[key] = self._carry(key)
         self._power_errors = errors
+        # A poll that failed says nothing about whether anything is charging, so
+        # an outage keeps the fast rate rather than quietly slowing down exactly
+        # when someone is watching for the charger to come back. A carried
+        # reading is a failed poll wearing the last answer's clothes, and counts
+        # the same way.
+        #
+        # Asked per port, with session.py's floors, rather than of the total.
+        # These chargers do not report zero: a full phone still draws the 0.1 A
+        # quantum, and a total of 1.8 W is as true as any other number -- so a
+        # truthy sum means "switched on", not "charging", and the slow rate
+        # would never arrive on the chargers that idle all night. The floors
+        # next door were measured rather than guessed, and a per-port threshold
+        # cannot be applied to a sum anyway: a bare cable's stray 0.3 A at
+        # 0.0 W disappears into it completely.
+        self._drawing = not power or any(
+            reading is None
+            or reading.get("carried_for")
+            or any(
+                port_drawing(values)
+                for values in (reading.get("ports") or {}).values()
+            )
+            for reading in power.values()
+        )
 
         # Only readings that actually arrived are folded in: a failed poll has to
         # leave every session untouched, or an outage would read as an unplug. A
@@ -255,6 +292,29 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._model_store.async_delay_save(
             lambda: {key: name for key, name in self._models.items() if name}, 1
         )
+    async def _device_state(self, key: str, iot_id: str) -> dict[str, Any]:
+        """The screen settings and the charging mode, on their own slow timer.
+
+        They only change when someone opens the app, and asking costs a round
+        trip of its own -- so asking beside every wattage doubles the traffic
+        for an answer that is the same one poll after poll.
+
+        Except when this has just written to the charger: then the copy is known
+        to be out of date, and waiting out the timer would mean watching one's
+        own change take a minute to appear.
+        """
+        cached, fetched_at = self._state.get(key, ({}, 0.0))
+        recent = cached and time.time() - fetched_at < DEVICE_STATE_INTERVAL
+        if recent and not self.rtcx.state_is_stale(iot_id):
+            return cached
+        state = await self.rtcx.async_device_state(iot_id)
+        if state is None:
+            # A reply that did not arrive says nothing about what the settings
+            # are; the last ones that did are still the best answer.
+            return cached
+        self.rtcx.state_was_read(iot_id)
+        self._state[key] = (state, time.time())
+        return state
 
     def _carry(self, key: str) -> dict[str, Any] | None:
         """The last reading that did arrive, while it is still worth showing.
