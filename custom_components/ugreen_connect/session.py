@@ -24,6 +24,17 @@ from dataclasses import dataclass, field
 # reset the counter.
 UNPLUG_DEBOUNCE = 30.0
 
+# How long a port has to stop drawing before "charge is flowing" turns false.
+#
+# Deliberately short, and deliberately not IDLE_END. That one keeps a bout
+# together for accounting -- a phone that sips at 100% belongs in the same
+# session rather than fragmenting the milliamp-hour figure -- and two hours is
+# the right answer to "is this bout over". It is the wrong answer to "is it
+# charging now", which is what a battery_charging sensor promises. Long enough
+# not to flap on one missed poll; short enough that somebody watching the
+# charger and the sensor sees them agree.
+DRAW_SETTLE = 30.0
+
 # How long the current has to stay down before a bout counts as over.
 #
 # This is the one number the hardware cannot settle for us. A phone sitting at 100%
@@ -74,6 +85,10 @@ class Session:
     # False until current actually flows, so a port with only a cable in it -- which
     # this charger reports exactly like an idle device -- never reads as a session.
     active: bool = False
+    # Whether charge is flowing right now, as opposed to the bout still being
+    # open. Separate from `active` on purpose: they answer different questions
+    # and are minutes to hours apart at the end of every bout.
+    delivering: bool = False
     protocol: str = "none"
     started_at: float | None = None
     ended_at: float | None = None
@@ -233,6 +248,7 @@ class SessionTracker:
         state.peak_w = max(state.peak_w, power)
         self._integrate(now, state, power)
         state.last_draw = now
+        state.delivering = True
 
     def _quiet(self, now: float, state: Session) -> None:
         """The port is live but nothing is flowing: time the pause, end the bout if it lasts."""
@@ -241,6 +257,8 @@ class SessionTracker:
             # Only a cable so far, as far as anyone can tell. Nothing to time.
             return
         self._integrate(now, state, 0.0)
+        if state.last_draw is not None and now - state.last_draw >= DRAW_SETTLE:
+            state.delivering = False
         if (
             state.active
             and state.last_draw is not None
@@ -259,6 +277,10 @@ class SessionTracker:
 
     def _empty(self, now: float, state: Session) -> None:
         """An empty reading: note when it started, and end the session if it holds."""
+        # Nothing is plugged in, so nothing is flowing -- no debounce needed for
+        # that half. The bout below still gets one, because a reading can go
+        # missing without the device having left.
+        state.delivering = False
         if state.empty_since is None:
             state.empty_since = now
             if state.started_at is not None and state.ended_at is None:
@@ -268,6 +290,7 @@ class SessionTracker:
 
     def _finish(self, now: float, state: Session) -> None:
         state.active = False
+        state.delivering = False
         if state.ended_at is None and state.started_at is not None:
             state.ended_at = state.last_draw if state.last_draw is not None else now
 

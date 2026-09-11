@@ -140,6 +140,16 @@
           "none": "Keines"
         }
       }
+    },
+    "binary_sensor": {
+      "charging": {
+        "name": "{port} lädt"
+      }
+    },
+    "event": {
+      "charging": {
+        "name": "{port} lädt"
+      }
     }
   },
   "services": {
