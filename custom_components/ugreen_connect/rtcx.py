@@ -108,6 +108,8 @@ class RtcxClient:
         # values are only as good as offsets established on a different one, and
         # these bytes are what someone else can check them against.
         self.last_frames: dict[str, dict[str, str]] = {}
+        # Chargers written to since their state was last read.
+        self._state_dirty: set[str] = set()
         # Stable per-account, so the cloud sees one client rather than a new one
         # on every restart. The app uses "ANDRC_" + 12 hex.
         self._client_key = "ANDRC_" + hashlib.sha256(
@@ -368,11 +370,22 @@ class RtcxClient:
             "wallpapers": wallpapers,
         }
 
+    def state_is_stale(self, iot_id: str) -> bool:
+        """Whether this charger has been written to since its state was read."""
+        return iot_id in self._state_dirty
+
+    def state_was_read(self, iot_id: str) -> None:
+        self._state_dirty.discard(iot_id)
+
     async def _setting(self, iot_id: str, cmd: int, payload: bytes) -> None:
         await self.call(
             "/client/thing/properties/set",
             {"iotId": iot_id, "items": {"PT_data": build_frame(FRAME_SETTING, cmd, payload)}},
         )
+        # Everything set this way shows up in the state reply, so whatever was
+        # last read of it is now out of date. Marked here rather than at each of
+        # the places that write, so a new one cannot forget to.
+        self._state_dirty.add(iot_id)
 
     async def async_set_picture(
         self, iot_id: str, url: str, size: int, image_id: str, stock: bool = False
@@ -398,6 +411,12 @@ class RtcxClient:
                 },
             },
         )
+        # The one write that does not go through _setting, and the charger's
+        # stored list of pictures is part of the state reply -- so without this
+        # the cache keeps looking current after the library has changed. The
+        # wallpaper flow happens to write the screensaver straight afterwards
+        # and mark it that way, which is luck rather than design.
+        self._state_dirty.add(iot_id)
 
     async def async_set_brightness(self, iot_id: str, value: int) -> None:
         await self._setting(

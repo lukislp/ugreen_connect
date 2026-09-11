@@ -58,6 +58,19 @@ CODE_WRONG_METHOD = 100001
 TOKEN_REFRESH_MARGIN = 120
 
 # The uplink drops a fair number of TLS handshakes; absorb those locally.
+# "Too many requests, please try again later" -- seen on oauth/authorize, the
+# call that mints the one-time code a gateway login consumes. Two Home
+# Assistants on one account are enough to provoke it: the gateway appears to
+# keep a single session per account, so each login unseats the other, whose
+# next request is rejected, which makes it log in again. The pingpong is what
+# hits the limit, not the polling.
+#
+# Retrying into that only feeds it, so once the cloud has said this, nothing is
+# sent for a while -- long enough to break the cycle, short enough that a
+# charger comes back on its own rather than needing a restart.
+CODE_RATE_LIMITED = 770003
+RATE_LIMIT_COOLDOWN = 120
+
 NETWORK_RETRIES = 3
 RETRY_DELAY = 1.5
 
@@ -76,6 +89,10 @@ class UgreenError(Exception):
 
 class UgreenAuthError(UgreenError):
     """Credentials were rejected, or the token is no longer valid."""
+
+
+class UgreenRateLimited(UgreenError):
+    """The cloud is refusing requests for now and wants to be left alone."""
 
 
 class UgreenApi:
@@ -99,6 +116,8 @@ class UgreenApi:
         self._user_id: str | None = None
         self._expires_at: float = 0.0
         self._credentials: tuple[str, str] | None = None
+        # When the cloud may be spoken to again after a rate limit.
+        self._rate_limited_until = 0.0
         self._relogin_lock = asyncio.Lock()
 
     @property
@@ -145,6 +164,11 @@ class UgreenApi:
         explicitly when it is wrong ("the supported http methods are [GET]"), so
         one corrected retry is attempted rather than failing the whole update.
         """
+        if (waiting := self._rate_limited_until - time.time()) > 0:
+            raise UgreenRateLimited(
+                f"{path}: the cloud is rate limiting this account "
+                f"({waiting:.0f}s left of the backoff)"
+            )
         if auth:
             await self._ensure_fresh_token()
         if encrypt:
@@ -168,6 +192,14 @@ class UgreenApi:
                 payload = await self._call(path, body, method, auth, extra_headers)
 
         code = payload.get("code")
+        if code == CODE_RATE_LIMITED:
+            self._rate_limited_until = time.time() + RATE_LIMIT_COOLDOWN
+            _LOGGER.warning(
+                "%s: %s -- holding off for %ds. Two Home Assistants on one "
+                "account will do this to each other indefinitely.",
+                path, payload.get("msg"), RATE_LIMIT_COOLDOWN,
+            )
+            raise UgreenRateLimited(f"{path}: {payload.get('msg')} (code {code})")
         if code == CODE_NO_PERMISSION:
             raise UgreenAuthError(f"{path}: {payload.get('msg')}")
         if raise_on_error and code != CODE_OK:
