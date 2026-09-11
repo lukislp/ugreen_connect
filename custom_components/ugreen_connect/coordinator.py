@@ -24,6 +24,8 @@ from .const import (
     DOMAIN,
     MIN_POLL_GAP,
     MODEL_LOOKUP_ATTEMPTS,
+    RETAIN_MISSES,
+    RETAIN_SECONDS,
     SESSION_GAP_FACTOR,
     STATIC_INFO_INTERVAL,
     WALLPAPER_LIST_INTERVAL,
@@ -77,6 +79,10 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._debug_dump = debug_dump
         self._dumped = False
         self._power_errors: dict[str, str] = {}
+        # The last reading that arrived whole, per charger, and how many polls
+        # have come up empty since.
+        self._good: dict[str, tuple[dict[str, Any], float]] = {}
+        self._misses: dict[str, int] = {}
         self._static: dict[str, tuple[dict[str, Any], float]] = {}
         self._wallpaper_cache: dict[str, tuple[list[dict[str, Any]], float]] = {}
         self._wallpaper_missed: dict[str, float] = {}
@@ -187,6 +193,7 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 power[key] = await self.rtcx.async_power(iot_id, model)
                 if power[key] is None:
                     errors[key] = "device returned no usable PT_data frame"
+                    power[key] = self._carry(key)
                 else:
                     power[key].update(await self.rtcx.async_device_state(iot_id) or {})
                     power[key].update(await self._static_info(key, iot_id))
@@ -201,20 +208,27 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         device, key, await self._wallpapers(device),
                         power[key].get("wallpaper"),
                     )
+                    # Only a reading with everything in it is worth carrying
+                    # into a poll that comes back empty.
+                    self._good[key] = (power[key], time.time())
+                    self._misses[key] = 0
             except UgreenError as err:
                 # Warn rather than debug: without this the entities simply never
                 # appear, with nothing anywhere saying why.
                 if self._power_errors.get(key) != str(err):
                     _LOGGER.warning("Live power unavailable for %s: %s", key, err)
                 errors[key] = str(err)
-                power[key] = None
+                power[key] = self._carry(key)
         self._power_errors = errors
 
         # Only readings that actually arrived are folded in: a failed poll has to
-        # leave every session untouched, or an outage would read as an unplug.
+        # leave every session untouched, or an outage would read as an unplug. A
+        # carried reading is the previous one shown again rather than a new
+        # measurement, so it counts as not having arrived -- integrating it
+        # would invent energy across exactly the gap where none was measured.
         stamp = time.time()
         for key, reading in power.items():
-            if reading:
+            if reading and not reading.get("carried_for"):
                 self.sessions.update(stamp, key, reading["ports"])
 
         data = {
@@ -241,6 +255,27 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._model_store.async_delay_save(
             lambda: {key: name for key, name in self._models.items() if name}, 1
         )
+
+    def _carry(self, key: str) -> dict[str, Any] | None:
+        """The last reading that did arrive, while it is still worth showing.
+
+        A reply going missing is ordinary rather than exceptional: the charger
+        answers into one cloud property, and anything else asking at the same
+        moment can take the answer meant for this poll. Blanking the charger
+        for a cycle reads like the device fell off the shelf.
+
+        Held only briefly, and never quietly -- past RETAIN_SECONDS, or after
+        RETAIN_MISSES in a row, unavailable is the honest answer again.
+        """
+        reading, arrived = self._good.get(key, (None, 0.0))
+        self._misses[key] = misses = self._misses.get(key, 0) + 1
+        age = time.time() - arrived
+        if reading is None or misses > RETAIN_MISSES or age > RETAIN_SECONDS:
+            return None
+        # Everything downstream tells a carried reading from a fresh one by
+        # this: the session tracker refuses to integrate it, and diagnostics
+        # say how old it is.
+        return reading | {"carried_for": round(age, 1)}
 
     async def _static_info(self, key: str, iot_id: str) -> dict[str, Any]:
         """Firmware version and SSID -- cached, since each costs a round trip to
