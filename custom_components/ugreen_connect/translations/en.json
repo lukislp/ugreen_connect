@@ -76,6 +76,12 @@
       },
       "session_charge": {
         "name": "{port} session charge"
+      },
+      "energy_total": {
+        "name": "{port} energy"
+      },
+      "energy_total_charger": {
+        "name": "Energy"
       }
     },
     "number": {

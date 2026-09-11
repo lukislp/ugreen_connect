@@ -81,6 +81,7 @@ async def async_setup_entry(
             if (key, "total") not in known_ports:
                 known_ports.add((key, "total"))
                 new.append(UgreenTotalPowerSensor(coordinator, key))
+                new.append(UgreenChargerEnergySensor(coordinator, key))
             # Every port of the report gets its entities up front, so the
             # dashboard shows the full layout from the start rather than waiting
             # for a port to happen to be drawing power during a poll.
@@ -95,6 +96,7 @@ async def async_setup_entry(
                 new.append(UgreenPortProtocolSensor(coordinator, key, port))
                 new.append(UgreenSessionEnergySensor(coordinator, key, port))
                 new.append(UgreenSessionChargeSensor(coordinator, key, port))
+                new.append(UgreenPortEnergySensor(coordinator, key, port))
         if new:
             async_add_entities(new)
 
@@ -268,6 +270,79 @@ class UgreenSessionSensor(UgreenDeviceEntity, SensorEntity):
 
 def _as_local(stamp: float | None) -> str | None:
     return dt_util.utc_from_timestamp(stamp).isoformat() if stamp else None
+
+
+class _UgreenEnergyTotal(RestoreEntity, SensorEntity):
+    """Everything delivered, ever -- the shape the Energy dashboard wants.
+
+    The charger keeps no energy total of its own; it reports watts and nothing
+    else. So these are integrated from the readings, by the same code and the
+    same thresholds the sessions use. The tracker only counts from the moment
+    it was made, so whatever came before a restart is read back from the
+    sensor's own last state and added underneath.
+
+    Kilowatt-hours here rather than the watt-hours a session is measured in: a
+    bout is worth tens of watt-hours and reads badly as 0.02 kWh, while a
+    lifetime total climbs past a kilowatt-hour and reads badly the other way.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 3
+    _attr_translation_key = "energy_total"
+
+    _before_restart = 0.0
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_state()) is None:
+            return
+        try:
+            self._before_restart = float(last.state)
+        except (TypeError, ValueError):
+            # `unknown` or `unavailable`, from a start that never got a reading.
+            # Beginning again at zero is what the Energy dashboard reads as a
+            # meter replacement, and with nothing better known that is the
+            # honest thing for it to read.
+            self._before_restart = 0.0
+
+    def _delivered_wh(self) -> float:
+        raise NotImplementedError
+
+    @property
+    def native_value(self) -> float:
+        return round(self._before_restart + self._delivered_wh() / 1000, 6)
+
+
+class UgreenPortEnergySensor(UgreenDeviceEntity, _UgreenEnergyTotal):
+    """Everything one port has ever delivered."""
+
+    def __init__(self, coordinator: UgreenCoordinator, key: str, port: str) -> None:
+        super().__init__(coordinator, key)
+        self._port = port
+        self._attr_translation_placeholders = {"port": port}
+        self._attr_unique_id = f"{key}_{port}_energy_total"
+
+    def _delivered_wh(self) -> float:
+        return self.coordinator.sessions.delivered(self._key, self._port)
+
+
+class UgreenChargerEnergySensor(UgreenDeviceEntity, _UgreenEnergyTotal):
+    """Everything the charger as a whole has delivered, every port added up.
+
+    Take this or the ports for the Energy dashboard, not both: together they
+    count every watt-hour twice.
+    """
+
+    _attr_translation_key = "energy_total_charger"
+
+    def __init__(self, coordinator: UgreenCoordinator, key: str) -> None:
+        super().__init__(coordinator, key)
+        self._attr_unique_id = f"{key}_energy_total"
+
+    def _delivered_wh(self) -> float:
+        return self.coordinator.sessions.delivered_total(self._key)
 
 
 class UgreenSessionEnergySensor(UgreenSessionSensor, RestoreEntity):

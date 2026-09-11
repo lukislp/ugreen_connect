@@ -118,6 +118,18 @@ class SessionTracker:
         self._max_gap = max_gap
         self._idle_end = idle_end
         self._sessions: dict[tuple[str, str], Session] = {}
+        # Watt-hours per port since this tracker was made, which is not the
+        # same as since the charger was bought -- the sensors add what came
+        # before a restart from their own last state.
+        self._delivered: dict[tuple[str, str], float] = {}
+
+    def delivered(self, key: str, port: str) -> float:
+        """Watt-hours this port has passed since the tracker was made."""
+        return self._delivered.get((key, port), 0.0)
+
+    def delivered_total(self, key: str) -> float:
+        """The same for the whole charger, every port added up."""
+        return sum(wh for (device, _), wh in self._delivered.items() if device == key)
 
     def session(self, key: str, port: str) -> Session | None:
         return self._sessions.get((key, port))
@@ -169,27 +181,40 @@ class SessionTracker:
                 if _swapped(state.protocol, protocol):
                     state = self._restart(key, port)
 
+            before = state.energy_wh
             if not _plugged(values):
                 self._empty(now, state)
-                continue
-
-            if not _drawing(values):
+            elif not _drawing(values):
                 self._quiet(now, state)
-                continue
-
-            # Charge is flowing. It belongs to the running bout unless that bout is
-            # over -- finished by the quiet timer, or stale because no reading arrived
-            # while it ran out, or ended by the port emptying and a different device
-            # answering.
-            stale = (
-                state.last_draw is not None
-                and now - state.last_draw >= self._idle_end
+            else:
+                # Charge is flowing. It belongs to the running bout unless that bout is
+                # over -- finished by the quiet timer, or stale because no reading arrived
+                # while it ran out, or ended by the port emptying and a different device
+                # answering.
+                stale = (
+                    state.last_draw is not None
+                    and now - state.last_draw >= self._idle_end
+                )
+                finished = state.started_at is not None and not state.active
+                swapped = state.empty_since is not None and _swapped(state.protocol, protocol)
+                if finished or stale or swapped:
+                    state = self._restart(key, port)
+                    before = state.energy_wh
+                self._advance(now, state, protocol, values)
+            # Whatever the session just gained, the lifetime total gains too.
+            # Taken around the whole dispatch rather than around _advance alone:
+            # a bout does not stop delivering the moment it stops drawing, and
+            # _quiet integrates the ramp down to zero. Crediting only the
+            # drawing branch left that last trapezoid in the session and out of
+            # the lifetime, every bout, always in the same direction -- two
+            # numbers on one dashboard that could never agree.
+            #
+            # Re-read after a restart, and only there: the old session's energy
+            # was credited on the polls that earned it, so a restart cannot
+            # lose what it already counted.
+            self._delivered[(key, port)] = (
+                self._delivered.get((key, port), 0.0) + state.energy_wh - before
             )
-            finished = state.started_at is not None and not state.active
-            swapped = state.empty_since is not None and _swapped(state.protocol, protocol)
-            if finished or stale or swapped:
-                state = self._restart(key, port)
-            self._advance(now, state, protocol, values)
 
     def _restart(self, key: str, port: str) -> Session:
         state = Session()

@@ -133,10 +133,11 @@ left as it was rather than added to.
 **What the device does not offer.** Its TSL model declares `WiFiRSSI`,
 `errorCode`, `IPAddress` and more, but this charger never populates them — asking
 for those identifiers returns the same four properties it always reports. There
-is no temperature sensor of any kind, and no energy total, so the charger cannot
-feed Home Assistant's Energy dashboard directly (a Riemann-sum helper over
-`total_power` is the usual workaround; the session sensors above measure a
-device's stay on a port, not a running total).
+is no temperature sensor of any kind, and no energy total of its own -- the
+charger reports watts and nothing else. The **Energy** sensors integrate those
+readings here instead, one per port and one for the charger, so the Energy
+dashboard can be fed without a Riemann-sum helper. Take the ports or the
+charger, not both: together they count every watt-hour twice.
 
 ## The screensaver card
 
