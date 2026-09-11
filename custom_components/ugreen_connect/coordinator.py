@@ -222,7 +222,7 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     errors[key] = "device returned no usable PT_data frame"
                     power[key] = self._carry(key)
                 else:
-                    power[key].update(await self._device_state(key, iot_id))
+                    power[key].update(await self._device_state(key, iot_id, model))
                     power[key].update(await self._static_info(key, iot_id))
                     power[key]["ota"] = self.rtcx.ota_state()
                     # A picture uploaded from the phone app is on the charger the
@@ -293,6 +293,18 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return data
 
+    def model_for(self, key: str) -> str | None:
+        """What this charger is, as far as anyone has been told.
+
+        The one source. `detail` carries the same name, but the product payload
+        is fetched afresh every process and the attempts are bounded, so after
+        a few failures it is empty while this still holds what was learned last
+        time and written down. Reading the model from there would have a
+        charger name its ports and read its screen at one model's offsets while
+        refusing every write on the grounds that nobody knows the model.
+        """
+        return self._models.get(key)
+
     def _remember(self) -> None:
         """Keep what has been learned, so the next start already knows it.
 
@@ -305,7 +317,9 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._model_store.async_delay_save(
             lambda: {key: name for key, name in self._models.items() if name}, 1
         )
-    async def _device_state(self, key: str, iot_id: str) -> dict[str, Any]:
+    async def _device_state(
+        self, key: str, iot_id: str, model: str | None
+    ) -> dict[str, Any]:
         """The screen settings and the charging mode, on their own slow timer.
 
         They only change when someone opens the app, and asking costs a round
@@ -320,7 +334,7 @@ class UgreenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         recent = cached and time.time() - fetched_at < DEVICE_STATE_INTERVAL
         if recent and not self.rtcx.state_is_stale(iot_id):
             return cached
-        state = await self.rtcx.async_device_state(iot_id)
+        state = await self.rtcx.async_device_state(iot_id, model)
         if state is None:
             # A reply that did not arrive says nothing about what the settings
             # are; the last ones that did are still the best answer.

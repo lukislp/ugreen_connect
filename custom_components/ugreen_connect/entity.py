@@ -6,13 +6,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import UgreenError
 from .const import DOMAIN
 from .coordinator import UgreenCoordinator, device_key
+from .protocol import state_writable
 
 # extra.onlineStatus / extra.networkStatus are 1 when up, 0 when down.
 ONLINE = 1
@@ -72,6 +73,27 @@ class UgreenDeviceEntity(CoordinatorEntity[UgreenCoordinator]):
     @property
     def available(self) -> bool:
         return super().available and bool(self._device)
+
+    def _require_writable(self, field: str) -> None:
+        """Refuse to set what has only ever been read on this model.
+
+        Reading a byte and writing it are separate permissions here, because
+        the commands are not symmetrical: brightness is set by a command
+        carrying one byte, so knowing where to read it is knowing how to set
+        it, while the charging mode's command carries the whole parameter
+        block -- and that block is a different length on a different charger.
+
+        Showing a value that cannot yet be set is better than hiding it, and
+        far better than sending a frame nobody has tried.
+        """
+        model = self.coordinator.model_for(self._key)
+        if field in state_writable(model):
+            return
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="not_writable_on_model",
+            translation_placeholders={"model": model or "?"},
+        )
 
     @property
     def device_info(self) -> DeviceInfo:

@@ -61,6 +61,8 @@ from .protocol import (
     build_frame,
     frame_body,
     parse_power_frame,
+    state_fields,
+    state_layout,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -82,9 +84,6 @@ CHARGING_MODE_PARAMS = 35
 STATE_BRIGHTNESS = 2
 STATE_SLEEP_TIME = 3
 STATE_CHARGING_MODE = 4
-STATE_SCREENSAVER = 40  # then theme at 41 and a further flag at 42
-STATE_IMAGE_ID = 43  # six ASCII bytes naming the wallpaper in use
-STATE_WALLPAPER_COUNT = 49  # then that many six-byte ids
 IMAGE_ID_LEN = 6
 
 
@@ -335,40 +334,60 @@ class RtcxClient:
         body = frame_body(value, FRAME_QUERY, QUERY_GET_PRODUCT_VERSION) if value else None
         return ".".join(str(b) for b in body) if body else None
 
-    async def async_device_state(self, iot_id: str) -> dict[str, Any] | None:
+    async def async_device_state(
+        self, iot_id: str, model: str | None = None
+    ) -> dict[str, Any] | None:
         """Everything the screen settings need, in one round trip.
 
-        Byte offsets were established by writing a distinctive value and reading
-        it back on a real charger, not by guessing.
+        Byte offsets were established by changing a value in the app and
+        watching which byte moved on a real charger, not by guessing -- which
+        proves the byte rather than the model, so where a model has not been
+        read, its fields are left out rather than approximated.
         """
+        fields = state_fields(model)
+        if not fields:
+            # The screen settings are offsets rather than a countable layout,
+            # and they are written back as well as read. On a charger whose
+            # reply has never been seen, none of them appears at all -- which
+            # leaves its readings working and its screen alone.
+            _LOGGER.debug("state reply not read on model %s", model)
+            return None
+        layout = state_layout(model)
         value = await self._ask(iot_id, FRAME_QUERY, QUERY_GET_DEVICE_STATE)
         body = frame_body(value, FRAME_QUERY, QUERY_GET_DEVICE_STATE) if value else None
-        if not body or len(body) <= STATE_WALLPAPER_COUNT:
+        if not body or len(body) < layout.image_id + IMAGE_ID_LEN:
             return None
 
-        image = body[STATE_IMAGE_ID : STATE_IMAGE_ID + IMAGE_ID_LEN]
-        count = body[STATE_WALLPAPER_COUNT]
-        start = STATE_WALLPAPER_COUNT + 1
-        wallpapers = [
-            body[start + IMAGE_ID_LEN * i : start + IMAGE_ID_LEN * (i + 1)].decode(
-                "ascii", "replace"
-            )
-            for i in range(count)
-            if len(body) >= start + IMAGE_ID_LEN * (i + 1)
-        ]
-        return {
+        image = body[layout.image_id : layout.image_id + IMAGE_ID_LEN]
+        # A count byte nobody has watched counting is not read at all.
+        wallpapers: list[str] = []
+        if layout.wallpaper_count is not None and len(body) > layout.wallpaper_count:
+            count = body[layout.wallpaper_count]
+            start = layout.wallpaper_count + 1
+            wallpapers = [
+                body[start + IMAGE_ID_LEN * i : start + IMAGE_ID_LEN * (i + 1)].decode(
+                    "ascii", "replace"
+                )
+                for i in range(count)
+                if len(body) >= start + IMAGE_ID_LEN * (i + 1)
+            ]
+        state = {
             "brightness": body[STATE_BRIGHTNESS],
             "sleep_time": body[STATE_SLEEP_TIME],
             "charging_mode": CHARGING_MODES.get(body[STATE_CHARGING_MODE]),
-            "screensaver": bool(body[STATE_SCREENSAVER]),
-            "screensaver_theme": body[STATE_SCREENSAVER + 1],
-            "screensaver_flag": body[STATE_SCREENSAVER + 2],
+            "screensaver": bool(body[layout.screensaver]),
+            "screensaver_theme": body[layout.screensaver + 1],
+            "screensaver_flag": body[layout.screensaver + 2],
             # All-0xFF is how "no picture" is spelled.
             "wallpaper": None if image == b"\xff" * IMAGE_ID_LEN else image.decode(
                 "ascii", "replace"
             ),
             "wallpapers": wallpapers,
         }
+        # A model is understood a field at a time. Everything not yet confirmed
+        # on this one is dropped here rather than published as a plausible
+        # number, and the entities that would have carried it never appear.
+        return {name: value for name, value in state.items() if name in fields}
 
     def state_is_stale(self, iot_id: str) -> bool:
         """Whether this charger has been written to since its state was read."""

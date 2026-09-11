@@ -13,7 +13,7 @@ The frame::
 from __future__ import annotations
 
 import logging
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -104,6 +104,119 @@ def ports_for(model: str | None, body_length: int) -> tuple[str, ...]:
     by_protocol = -(-body_length // (PORT_RECORD + 1))   # rounded up
     by_measurement = body_length // PORT_RECORD
     return tuple(f"P{index + 1}" for index in range(min(by_protocol, by_measurement)))
+
+
+# Which fields of the GET_DEVICE_STATE reply have been read on real hardware,
+# per model.
+#
+# Deliberately not the same list as the ports above, and the difference is the
+# point. How many ports a report describes can be counted from its length, so
+# readings work anywhere. Where brightness or the screensaver sit cannot be
+# counted -- they are offsets, established by changing a value in the app and
+# watching which byte moved. On a model laid out differently they would read
+# something plausible and wrong, and every one of these entities writes back as
+# well as reads.
+#
+# Per field rather than per model, because a model does not arrive understood
+# all at once. The X776's owner mapped its brightness, screen timeout, charging
+# mode, screensaver group and current wallpaper by hand, one change at a time;
+# its wallpaper library is still not understood. Under an all-or-nothing rule
+# that knowledge would sit unused until the last byte fell.
+STATE_FIELDS_ALL: Final[frozenset[str]] = frozenset(
+    {
+        "brightness",
+        "sleep_time",
+        "charging_mode",
+        "screensaver",
+        "screensaver_theme",
+        "screensaver_flag",
+        "wallpaper",
+        "wallpapers",
+    }
+)
+
+STATE_FIELDS_BY_MODEL: Final[dict[str, frozenset[str]]] = {
+    "X783": STATE_FIELDS_ALL,
+    # `wallpapers` is missing on purpose: the byte where the X783 counts its
+    # library reads 5 on a 160W whether three ids follow or four, so whatever
+    # it counts, it is not them.
+    "X776": STATE_FIELDS_ALL - {"wallpapers"},
+}
+
+# Reading a byte and writing it are separate permissions, because the commands
+# are not symmetrical. Brightness and the screen timeout are set by a command
+# carrying one byte, so knowing where to read them is knowing how to set them.
+# The charging mode is not: its command carries the whole parameter block, and
+# the 160W's block is nine bytes shorter than the one that shape was learned
+# on. Sending 35 bytes into a 26-byte space would land on the screensaver group
+# and the wallpaper id, which sit directly after it.
+#
+# So a field is writable where a write has actually been made and read back.
+# Everything else is shown and refuses, which is a better answer than either
+# hiding it or sending a frame nobody has tried.
+STATE_WRITABLE_BY_MODEL: Final[dict[str, frozenset[str]]] = {
+    "X783": STATE_FIELDS_ALL,
+    "X776": frozenset({"brightness", "sleep_time"}),
+}
+
+
+class StateLayout(NamedTuple):
+    """Where the tail of a state reply sits on one model.
+
+    Brightness, the screen timeout and the charging mode are at 2, 3 and 4 on
+    both chargers seen so far, so they stay constants. Everything after the
+    charging mode's parameter block moves with its length: the 160W's block is
+    26 bytes where the 300W's is 35, so its screensaver group and wallpaper sit
+    nine bytes earlier.
+
+    ``wallpaper_count`` is None where that byte has been seen and not
+    understood -- reading a list from a count that does not count is worse than
+    publishing no list.
+    """
+
+    screensaver: int          # then clock style at +1 and time format at +2
+    image_id: int             # six ASCII bytes naming the picture on screen
+    wallpaper_count: int | None
+
+
+STATE_LAYOUT_BY_MODEL: Final[dict[str, StateLayout]] = {
+    "X783": StateLayout(screensaver=40, image_id=43, wallpaper_count=49),
+    "X776": StateLayout(screensaver=31, image_id=34, wallpaper_count=None),
+}
+
+
+def state_fields(model: str | None) -> frozenset[str]:
+    """Which parts of a state reply may be believed on this model.
+
+    A charger whose model the account API would not name is read in full, as it
+    always has been: that is far more often the charger this was written on than
+    a stranger, and the alternative is losing the screen to one failed lookup.
+    Reading is the half that can be wrong and recovered from; state_writable
+    next door refuses the other half for the same unknown model.
+    """
+    if model is None:
+        return STATE_FIELDS_ALL
+    return STATE_FIELDS_BY_MODEL.get(model, frozenset())
+
+
+def state_writable(model: str | None) -> frozenset[str]:
+    """Which of this model's state fields may be set as well as read.
+
+    Nothing, when nobody could say which model this is. Reading an unknown
+    charger at the X783's offsets shows wrong numbers, which is recoverable by
+    looking again; writing at them puts bytes somewhere else on the device --
+    the 160W keeps its screensaver group nine bytes earlier, so a write meant
+    for one setting lands on another. Refusing is the right direction for a
+    guard to fail in, and the controls come back the moment a lookup succeeds.
+    """
+    if model is None:
+        return frozenset()
+    return STATE_WRITABLE_BY_MODEL.get(model, frozenset())
+
+
+def state_layout(model: str | None) -> StateLayout:
+    """Where to read this model's screen settings; the X783's where unknown."""
+    return STATE_LAYOUT_BY_MODEL.get(model or "", STATE_LAYOUT_BY_MODEL["X783"])
 
 
 def crc16_modbus(data: bytes) -> int:

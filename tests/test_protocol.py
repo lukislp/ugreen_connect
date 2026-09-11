@@ -111,3 +111,37 @@ def test_only_frames_known_to_be_harmless_may_be_published():
     assert f"{p.FRAME_QUERY:02X}/{p.QUERY_GET_DEVICE_STATE}" in p.PUBLISHABLE_FRAMES
     assert f"{p.FRAME_QUERY:02X}/{p.QUERY_GET_WIFI_SSID}" not in p.PUBLISHABLE_FRAMES
     assert f"{p.FRAME_QUERY:02X}/{p.QUERY_GET_SN}" not in p.PUBLISHABLE_FRAMES
+# --- what may be believed, and what may be set -----------------------------
+
+
+def test_the_tail_moves_with_the_parameter_block():
+    # The 160W's block is 26 bytes where the 300W's is 35, so everything after
+    # it sits nine bytes earlier. Measured on one, not derived.
+    x783, x776 = p.state_layout("X783"), p.state_layout("X776")
+    assert (x783.screensaver, x783.image_id) == (40, 43)
+    assert (x776.screensaver, x776.image_id) == (31, 34)
+    assert x783.screensaver - x776.screensaver == 9
+
+
+def test_a_count_nobody_has_watched_counting_is_not_read():
+    assert p.state_layout("X783").wallpaper_count == 49
+    assert p.state_layout("X776").wallpaper_count is None
+    assert "wallpapers" not in p.state_fields("X776")
+
+
+def test_a_model_nobody_has_read_gets_no_screen_at_all():
+    assert p.state_fields("X999") == frozenset()
+    # ...but a charger the account API would not name is far more often the one
+    # this was written on than a stranger.
+    assert p.state_fields(None) == p.STATE_FIELDS_ALL
+
+
+def test_reading_a_field_is_not_permission_to_write_it():
+    # Brightness is one byte and its command carries one byte. The charging
+    # mode's command carries the whole parameter block, which is a different
+    # length on the 160W -- so it is shown there and not set.
+    assert "charging_mode" in p.state_fields("X776")
+    assert "charging_mode" not in p.state_writable("X776")
+    assert "brightness" in p.state_writable("X776")
+    assert p.state_writable("X783") == p.STATE_FIELDS_ALL
+    assert p.state_writable("X999") == frozenset()
