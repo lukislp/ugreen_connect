@@ -13,6 +13,7 @@ anything back.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from homeassistant.components.event import EventEntity
@@ -65,7 +66,7 @@ class UgreenChargingEvent(UgreenDeviceEntity, EventEntity):
     def __init__(self, coordinator: UgreenCoordinator, key: str, port: str) -> None:
         super().__init__(coordinator, key)
         self._port = port
-        self._attr_translation_key = "charging"
+        self._attr_translation_key = "charging_event"
         self._attr_translation_placeholders = {"port": port}
         self._attr_unique_id = f"{key}_{port}_charging_event"
         # What the last poll saw, so a change can be recognised as one.
@@ -74,10 +75,26 @@ class UgreenChargingEvent(UgreenDeviceEntity, EventEntity):
         # The last figures seen, so an ended bout is reported as it was rather
         # than as whatever replaced it.
         self._last: dict[str, Any] | None = None
-        # The first update after a start only records where things stand. A
-        # session restored across a restart has been running for hours and its
-        # start is old news; announcing it would wake the house at boot.
-        self._primed = False
+        # A bout that began before this entity existed is old news. Compared
+        # against rather than skipping the first update, which swallowed a real
+        # start: entities are built inside a coordinator listener, so the poll
+        # that adds one is never delivered to it and "the first update" is
+        # already the next one -- a bout starting there lost its STARTED and
+        # ended later with nothing to pair the end with. It also does not care
+        # whether the session has been restored yet, and the restore happens on
+        # a platform forwarded after this one.
+        #
+        # Two cases still produce a lone ENDED, for different reasons: a bout
+        # that survives a restart, whose `started_at` comes out of storage and
+        # so predates this entity by design; and one starting on the very poll
+        # that adds the entity, which loses only because the coordinator stamps
+        # its readings before the listener that builds entities runs. Both are
+        # arguably right -- a charge still running when Home Assistant came
+        # back, and finishing afterwards, is worth being told about even though
+        # nothing announced its start. A bout that ended during the downtime
+        # announces nothing at all: it is finished on the first poll, while
+        # `_active` is still False.
+        self._added_at = time.time()
 
     @property
     def _session(self) -> Session | None:
@@ -98,7 +115,11 @@ class UgreenChargingEvent(UgreenDeviceEntity, EventEntity):
             super()._handle_coordinator_update()
             return
 
-        started = session.started_at is not None and session.started_at != self._started_at
+        started = (
+            session.started_at is not None
+            and session.started_at != self._started_at
+            and session.started_at >= self._added_at
+        )
         # The bout, not the flow. A port with a full phone on it stops and
         # resumes every few minutes all night, and every one of those is a real
         # change in whether charge is moving -- which is what the battery
@@ -111,20 +132,17 @@ class UgreenChargingEvent(UgreenDeviceEntity, EventEntity):
         # Ended first, because that is the order it happened in -- and with the
         # figures from the bout that ended, which the tracker has already
         # replaced by the time this runs.
-        if not self._primed:
-            self._primed = True
-        else:
-            # Each one is written as it is raised. `_trigger_event` only
-            # records the type, the time and the attributes -- it writes no
-            # state of its own -- so two raised in one poll would leave only
-            # the second, and the pair this block exists to keep would arrive
-            # as a lone STARTED.
-            if self._active and (started or not session.active):
-                self._trigger_event(ENDED, self._last or self._details(session))
-                self.async_write_ha_state()
-            if started:
-                self._trigger_event(STARTED, self._details(session))
-                self.async_write_ha_state()
+        if self._active and (started or not session.active):
+            self._trigger_event(ENDED, self._last or self._details(session))
+            # Written here rather than left to the update at the end. The base
+            # class records an event and returns; the state is what carries it
+            # to anything listening, and one write at the end would let the
+            # second of a pair overwrite the first -- which is exactly the
+            # swap case the two calls exist for.
+            self.async_write_ha_state()
+        if started:
+            self._trigger_event(STARTED, self._details(session))
+            self.async_write_ha_state()
 
         self._started_at = session.started_at
         self._active = session.active

@@ -147,8 +147,8 @@
       }
     },
     "event": {
-      "charging": {
-        "name": "{port} charging"
+      "charging_event": {
+        "name": "{port} charging bout"
       }
     }
   },

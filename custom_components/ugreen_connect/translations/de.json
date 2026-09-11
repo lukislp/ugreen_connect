@@ -147,8 +147,8 @@
       }
     },
     "event": {
-      "charging": {
-        "name": "{port} lädt"
+      "charging_event": {
+        "name": "{port} Ladevorgang"
       }
     }
   },

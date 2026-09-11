@@ -1,7 +1,9 @@
 """Charging-session tracking: what starts a session, what ends it, what it accumulates."""
 
-import pytest
+import ast
+from pathlib import Path
 
+import pytest
 from conftest import session as session_module
 
 SessionTracker = session_module.SessionTracker
@@ -217,16 +219,28 @@ def test_a_restored_session_is_dropped_when_a_different_device_is_there():
 
 
 def test_a_restored_session_is_finished_when_the_port_is_empty():
-    """The device was taken off during the downtime: keep the total, stop the session."""
+    """The device was taken off during the downtime: keep the total, stop the session.
+
+    `ended_at` is asserted because it is the one figure here that is not
+    self-evident and the only one a reader would take on trust. It has to be
+    when charge last flowed, not when Home Assistant came back and noticed --
+    a bout that ended at 22:43 and is seen again at 01:43 would otherwise be
+    published as three hours long at a fifth of its real average, and those
+    figures are what the next restart restores from, so the error compounds.
+    """
     tracker = SessionTracker()
+    last_draw = 900.0
     tracker.restore(
-        KEY, PORT, {"energy_wh": 12.0, "active": True, "protocol": "PD", "started_at": 100.0}
+        KEY, PORT,
+        {"energy_wh": 12.0, "active": True, "protocol": "PD",
+         "started_at": 100.0, "last_draw": last_draw},
     )
     tracker.update(5000.0, KEY, EMPTY)
 
     state = tracker.session(KEY, PORT)
     assert state.active is False
     assert state.energy_wh == pytest.approx(12.0)
+    assert state.ended_at == last_draw
 
 
 def test_a_port_with_nothing_on_it_is_not_charging():
@@ -450,6 +464,43 @@ def test_charge_stops_flowing_long_before_the_bout_is_over():
     assert session.active is True
 
 
+def _configurable_bout_minimums() -> list[float]:
+    """Every idle window the dialogs will accept, smallest first, in seconds.
+
+    Both schemas, matched on CONF_IDLE_END rather than on a minute-valued
+    selector: there are two of those -- setup and options -- and taking the
+    first walked would have let the other one be lowered past the settle with
+    this still green. The gate on `delivering` is only safe while a bout
+    outlives it, so both have to be checked, not whichever comes first.
+    """
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "custom_components" / "ugreen_connect" / "config_flow.py"
+    )
+    tree = ast.parse(source.read_text(encoding="utf-8"), str(source))
+    found: list[float] = []
+    # The selector is the dict *value* beside the `vol.Required(...)` key, not
+    # nested inside it, so the two have to be paired rather than walked.
+    for mapping in ast.walk(tree):
+        if not isinstance(mapping, ast.Dict):
+            continue
+        for key, value in zip(mapping.keys, mapping.values):
+            if not isinstance(key, ast.Call) or not key.args:
+                continue
+            if getattr(key.args[0], "id", None) != "CONF_IDLE_END":
+                continue
+            for selector in ast.walk(value):
+                if not isinstance(selector, ast.Call):
+                    continue
+                if getattr(selector.func, "id", None) != "NumberSelectorConfig":
+                    continue
+                smallest = {kw.arg: kw.value for kw in selector.keywords}.get("min")
+                if isinstance(smallest, ast.Constant):
+                    found.append(float(smallest.value) * 60)
+    assert len(found) == 2, f"expected the setup and options schemas, found {found}"
+    return sorted(found)
+
+
 def test_the_two_windows_cannot_meet():
     """The separation the split rests on, asserted rather than assumed.
 
@@ -463,9 +514,13 @@ def test_the_two_windows_cannot_meet():
     picked here: the settle has to be shorter than any bout anybody can
     configure, or the two would collide on somebody's real settings.
     """
-    # The shortest bout the options dialog allows, in seconds.
-    shortest_bout = 5 * 60
-    assert shortest_bout > session_module.DRAW_SETTLE
+    # Read out of the dialogs rather than copied from them: a number typed here
+    # would keep agreeing with a docstring that had stopped being true the
+    # moment somebody lowered a minimum. Both dialogs, because `delivering` is
+    # now gated on the bout being live -- an idle window shorter than the settle
+    # would have the gate suppressing delivery that is genuinely happening.
+    for smallest in _configurable_bout_minimums():
+        assert smallest > session_module.DRAW_SETTLE
     assert session_module.IDLE_END > session_module.DRAW_SETTLE
 
 
@@ -516,11 +571,58 @@ def test_a_slow_poll_is_not_made_stale_by_the_blip_guard(step):
 
 @pytest.mark.parametrize("step", [5.0, 10.0])
 def test_a_port_that_stays_empty_does_stop_delivering(step):
-    """The other half of the fast-poll guard: two empty readings is a device gone."""
+    """The other half of the fast-poll guard: a device gone is reported as gone.
+
+    Counting empty readings was the earlier answer and this asserted two. The
+    rule is the settle instead -- one clock for "no current lately", asked once
+    after the dispatch, so an empty port and a live one that stopped drawing
+    cannot disagree about the same physical fact. Two empty readings five
+    seconds apart is ten seconds without current, which is not yet a claim
+    worth making.
+    """
     tracker = SessionTracker()
     now = feed(tracker, 1000.0, 10 * step, reading(20.0), step=step) + step
 
     tracker.update(now, KEY, EMPTY)
     assert tracker.session(KEY, PORT).delivering is True, "the first is the blip"
-    tracker.update(now + step, KEY, EMPTY)
+
+    last_draw = tracker.session(KEY, PORT).last_draw
+    # The reading that separates the two answers. Counting empty readings makes
+    # this False; one clock keeps it True until the settle has actually passed.
+    # Without this line the suite is green against either, which is how the
+    # change it is here to hold could be reverted unnoticed.
+    now += step
+    tracker.update(now, KEY, EMPTY)
+    assert tracker.session(KEY, PORT).delivering is True
+    while now - last_draw < session_module.DRAW_SETTLE:
+        now += step
+        tracker.update(now, KEY, EMPTY)
     assert tracker.session(KEY, PORT).delivering is False
+
+
+def test_a_restored_bout_on_an_empty_port_never_reads_as_charging():
+    """last_draw outlives the bout it belonged to, and it must not speak for it.
+
+    Reloading the entry -- the options dialog, seconds rather than minutes --
+    restores a session and finishes it on the first poll, because the port is
+    empty. The timestamp of the last current stays, though, and read on its own
+    it says charge flowed moments ago. That turned `battery_charging` on for
+    four polls on a port with nothing in it, alongside session sensors saying
+    the bout was over, and fired a spurious `to: "on"` at whatever was
+    listening.
+    """
+    tracker = SessionTracker()
+    last_draw = 1000.0
+    tracker.restore(
+        KEY, PORT,
+        {"energy_wh": 12.0, "active": True, "protocol": "PD",
+         "started_at": 100.0, "last_draw": last_draw},
+    )
+
+    seen = []
+    for poll in range(1, 8):
+        tracker.update(last_draw + poll * 5.0, KEY, EMPTY)
+        seen.append(tracker.session(KEY, PORT).delivering)
+
+    assert seen == [False] * 7, seen
+
