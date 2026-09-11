@@ -379,3 +379,37 @@ def test_a_restored_session_that_never_started_has_no_end():
     })
 
     assert tracker.session(KEY, PORT).ended_at is None
+
+
+def test_the_lifetime_total_is_the_sum_of_the_bouts():
+    """Two numbers on one dashboard, and they have to agree.
+
+    A bout does not stop delivering the moment it stops drawing: the ramp down
+    to zero is integrated by the quiet branch, and that trapezoid used to land
+    in the session and never in the lifetime -- every bout, always the same
+    direction, for as long as the sensor existed. The Energy dashboard and the
+    session sensors would then disagree permanently, and the one people check
+    against the wall socket is the one that looked wrong.
+    """
+    tracker = SessionTracker()
+    now, bouts = 1000.0, 0.0
+    for _ in range(30):
+        for _step in range(12):
+            tracker.update(now, "dev", {"C1": {"voltage": 9.0, "current": 2.2,
+                                               "power": 20.0, "protocol": "PD"}})
+            now += 5
+        # The tail: live, no longer drawing. This is the part that went missing.
+        for _step in range(2):
+            tracker.update(now, "dev", {"C1": {"voltage": 9.0, "current": 0.0,
+                                               "power": 0.0, "protocol": "PD"}})
+            now += 5
+        session = tracker.session("dev", "C1")
+        bouts += session.energy_wh if session else 0.0
+        for _step in range(40):
+            tracker.update(now, "dev", {"C1": {"voltage": 0.0, "current": 0.0,
+                                               "power": 0.0, "protocol": "none"}})
+            now += 5
+
+    assert bouts > 0
+    assert tracker.delivered_total("dev") == pytest.approx(bouts)
+
