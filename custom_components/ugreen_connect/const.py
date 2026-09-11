@@ -90,6 +90,19 @@ PT_DATA_MAX_AGE: Final = 300
 # forever: if that endpoint is simply down, numbered ports beat no ports, and
 # the decision then stays put.
 MODEL_LOOKUP_ATTEMPTS: Final = 3
+# How far a reading that did arrive may be carried when the next one does not.
+#
+# The charger answers into a single cloud property, so anything else asking at
+# the same moment -- a second Home Assistant, the phone app being opened -- can
+# take the reply meant for this one. Blanking every entity of a charger for a
+# cycle reads like the device fell off the shelf, and nothing it last said is
+# less true for being a few seconds old.
+#
+# Both bounds are deliberately short. This covers a reply going astray, not a
+# charger that has been unplugged: past either, "unavailable" is the honest
+# answer again.
+RETAIN_MISSES: Final = 2
+RETAIN_SECONDS: Final = 60
 
 # The charger's screen, in pixels. Its stock pictures are stored rotated, but
 # what the app uploads is this way round.
