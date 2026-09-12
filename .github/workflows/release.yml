@@ -1,0 +1,164 @@
+name: Release
+
+# The version lives in two places -- the tag and `manifest.json` -- and HACS
+# reads the second while people read the first. This repository has already
+# shipped a release where they disagreed. So the manifest is written from the
+# version being released, in the commit the tag then points at, and a tag
+# pushed by hand is checked against it afterwards.
+#
+# "Afterwards" is the honest word for `agree`: GitHub does not start workflow
+# runs from GITHUB_TOKEN pushes, so nothing here runs on what `cut` produces.
+# It is a tripwire for a tag pushed by hand, reporting a mismatch once the tag
+# is already public, not a gate anything passes through.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the v (e.g. 1.4.0)"
+        required: true
+  push:
+    tags: ["v*"]
+
+# Deliberately not workflow-level write: only `cut` writes anything, and the
+# jobs that merely read have no business holding a token that could.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Before anything is tagged
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      # Dispatch can be fired from any ref, and `actions/checkout` leaves HEAD
+      # attached -- so without this the commit, the tag and the release would
+      # all land on whatever branch was dispatched while the default branch
+      # never contained the code. Said out loud rather than expressed as a job
+      # condition, because a job that skips reports nothing and the operator is
+      # left looking at a run where everything is grey.
+      - name: Only from master
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/master" ]]; then
+            echo "::error::dispatched from $GITHUB_REF; a release is cut from master"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # aiohttp and cryptography are named because without them four tests skip
+      # -- the ones about a rate limit being told apart from a rejected
+      # password, which a PR in this series exists to add. Skips are green, so
+      # the gate would look identical while covering less than a developer's
+      # run does.
+      - run: pip install "ruff==0.16.1" pytest aiohttp cryptography
+      - run: ruff check .
+      - run: pytest tests -q
+
+  cut:
+    name: Cut the release
+    needs: [verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Bound once, for every step, rather than pasted into any of them. A
+    # `${{ }}` expansion is substituted before bash parses the line, so a
+    # version of `$(touch /tmp/PWNED; echo 9.9.9)` would run its command
+    # substitution and hand the check a string that matches -- the guard
+    # reporting success on the one input it exists to refuse, on a runner
+    # holding a token with write access.
+    #
+    # Binding it here also means nothing has to be written to GITHUB_ENV. That
+    # file is parsed line by line, so passing a validated-looking string
+    # through it re-opened the same hole one layer down: a version whose first
+    # line is `1.0.0` and whose second is `NODE_OPTIONS=--require=/tmp/evil.js`
+    # would set that variable for every later step -- including the Node action
+    # that publishes the release.
+    env:
+      VERSION: ${{ inputs.version }}
+      MANIFEST: custom_components/ugreen_connect/manifest.json
+    steps:
+      - uses: actions/checkout@v4
+      # `[[ =~ ]]` and not `grep`: `^` and `$` anchor a *line*, and the property
+      # wanted here is about the whole string. `grep -q` exits 0 on the first
+      # line that matches, whatever follows it.
+      #
+      # And the shape of a version says nothing about its direction. Typing
+      # 1.1.0 while the manifest says 1.2.3 succeeds all the way through --
+      # manifest written backwards, committed, tagged, and published as Latest,
+      # so HACS offers the older build as an update to everyone already past
+      # it. That is the failure this workflow opens by describing, reached from
+      # the other side: not the tag and the manifest disagreeing, but both
+      # agreeing on the wrong number.
+      - name: Refuse anything that is not a version, or not a newer one
+        run: |
+          if [[ ! $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be x.y.z"
+            exit 1
+          fi
+          current=$(jq -r .version "$MANIFEST")
+          if [[ "$VERSION" == "$current" ]]; then
+            echo "::error::$VERSION is already what the manifest says"
+            exit 1
+          fi
+          if [[ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | head -1)" != "$current" ]]; then
+            echo "::error::$VERSION is older than $current, which is what the manifest says"
+            exit 1
+          fi
+      - name: Write it into the manifest
+        run: |
+          jq --arg v "$VERSION" '.version = $v' "$MANIFEST" > manifest.tmp
+          mv manifest.tmp "$MANIFEST"
+      # The one file this job edits is the one HACS reads, and hassfest is the
+      # only check anywhere that validates it. The commit made below is pushed
+      # by GITHUB_TOKEN and therefore starts no runs, so without this it would
+      # be the only commit in the repository nothing has ever checked.
+      - uses: home-assistant/actions/hassfest@master
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Re-running the same version is the state a failed push leaves
+          # behind, and `git commit` exits non-zero with nothing staged -- so
+          # the recovery run would fail on its first step.
+          if git diff --quiet; then
+            echo "manifest already says $VERSION"
+          else
+            git commit -am "Release $VERSION"
+          fi
+          git tag "v$VERSION"
+          # Atomic, and the two refs named rather than `--tags`. Git pushes a
+          # tag before a branch, so a non-atomic push onto a branch that moved
+          # -- or a protected one that refuses a bot -- leaves the tag public
+          # and reachable from no branch while the manifest stays behind. That
+          # is precisely the split this workflow exists to prevent, and drafting
+          # a release from the tag already sitting there would ship it.
+          git push --atomic origin HEAD "refs/tags/v$VERSION"
+      # Pinned. Every step in this job can reach the write token -- checkout is
+      # given it deliberately -- so a third-party action on a moving ref is the
+      # weakest link among them rather than the only one holding anything.
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: "v${{ env.VERSION }}"
+          generate_release_notes: true
+
+  agree:
+    name: Tag and manifest agree
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compare them
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          in_manifest=$(jq -r .version custom_components/ugreen_connect/manifest.json)
+          if [ "$tagged" != "$in_manifest" ]; then
+            echo "::error::tag says $tagged, manifest says $in_manifest"
+            exit 1
+          fi
+          echo "both say $tagged"
