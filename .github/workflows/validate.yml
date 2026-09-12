@@ -8,12 +8,36 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   hassfest:
     name: Home Assistant manifest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # hassfest runs from an image on ghcr.io, and the registry throttles hard
+      # enough that the same commit passes or fails depending on the hour. Two
+      # things help and both are here: authenticating raises the limit, and
+      # pulling with a few attempts leaves the image local, after which
+      # `docker run` inside the action skips the registry entirely. Deleting
+      # either one puts the flakiness back.
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Fetch the hassfest image, retrying
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if docker pull ghcr.io/home-assistant/hassfest:latest; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "attempt $attempt did not get it; waiting $((attempt * 15))s"
+              sleep $((attempt * 15))
+            fi
+          done
+          echo "::error::ghcr.io would not hand over the hassfest image after five attempts"
+          exit 1
       - uses: home-assistant/actions/hassfest@master
 
   hacs:
@@ -24,6 +48,22 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # Pinned: with UP, SIM and RUF selected, an unrelated pull request would
+      # otherwise go red the week ruff ships a new rule. The weekly cron is
+      # where that belongs -- against nobody's change in particular.
+      - run: pip install "ruff==0.16.1"
+      # Narrow on purpose: imports left behind by a refactor and names that no
+      # longer exist, not style. See ruff.toml.
+      - run: ruff check .
 
   tests:
     name: Session logic
@@ -36,5 +76,5 @@ jobs:
       # `session.py` carries no Home Assistant imports precisely so its rules can be
       # exercised without installing one; the tests load it straight from its file and
       # fail loudly if that ever stops being true.
-      - run: pip install pytest
+      - run: pip install pytest aiohttp cryptography
       - run: pytest tests -q

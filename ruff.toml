@@ -1,0 +1,27 @@
+# Deliberately a narrow set, though not as narrow as saying "not style" would
+# make it sound: `F` is the one that catches what slips past a person editing
+# several files at once -- imports left behind by a refactor, a name that no
+# longer exists -- while `E`, `I`, `UP` and `SIM` are style and refactor rules
+# that happen to be cheap to satisfy and quiet in practice. What is left out is
+# everything that would argue with code inherited from somewhere else.
+line-length = 100
+# Otherwise ruff assumes 3.10 while CI runs 3.13, so `UP` is quietly weaker
+# than this project's real floor -- and a ruff release that changed the
+# assumption would move the goalposts under whatever pull request happened to
+# be open, which is the rot the pinned version exists to prevent.
+target-version = "py313"
+
+[lint]
+select = ["E", "F", "I", "UP", "SIM", "RUF"]
+ignore = [
+    # Home Assistant's own entity classes assign plain lists to `_attr_options`
+    # and `_attr_event_types`; they are read, never mutated, and rewriting them
+    # as ClassVar to satisfy a linter would make this code look unlike every
+    # other integration.
+    "RUF012",
+    # Several files carry `# noqa` for rules this configuration does not
+    # select. They document why the code is written as it is, for whoever
+    # reads it with a stricter linter than this one, and deleting them to
+    # silence a linter would be the wrong way round.
+    "RUF100",
+]
