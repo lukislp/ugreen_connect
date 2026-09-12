@@ -78,3 +78,40 @@ jobs:
       # fail loudly if that ever stops being true.
       - run: pip install pytest aiohttp cryptography
       - run: pytest tests -q
+
+  integration:
+    name: Home Assistant layer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Run inside the image the integration actually runs in.
+      #
+      # `pytest-homeassistant-custom-component` pins one exact Home Assistant
+      # per release of itself, and which release pip picks depends on the
+      # Python it installs under. On a bare runner that lands on a Home
+      # Assistant months behind the one anybody deploys, and entities that
+      # depend on newer registry calls simply never appear -- a red job about a
+      # release nobody targets. Inside the image the Python is Home Assistant's
+      # own, so pip picks the plugin that pins the version already installed
+      # and nothing moves. It also makes this job and a local run the same
+      # command instead of two environments that agree by luck.
+      #
+      # Pinned on purpose: this says the integration works on one known
+      # version, and moving to the next should be a commit somebody made.
+      - name: Fetch the Home Assistant image, retrying
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if docker pull ghcr.io/home-assistant/home-assistant:2026.9.1; then
+              exit 0
+            fi
+            echo "attempt $attempt did not get it; waiting $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "::error::ghcr.io would not hand over the Home Assistant image after five attempts"
+          exit 1
+      # No flags: `tests_ha/pytest.ini` says what this directory needs, so the
+      # command here is the one to run by hand and the two cannot drift.
+      - name: Start the integration under Home Assistant
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo             ghcr.io/home-assistant/home-assistant:2026.9.1             sh -c 'pip install --quiet pytest-homeassistant-custom-component && pytest tests_ha -q'
+
