@@ -86,12 +86,32 @@ SIGNED_HEADERS = ("x-ca-key", "x-ca-nonce", "x-ca-timestamp")
 # it was carrying or refuses the write, which is what `dc_turbo` does. Hence the
 # block last seen for a mode goes back out with it.
 #
-# That byte is `priority`'s chosen port: set to C2 in the app it reads 0x02.
-# The rest of `priority`'s block has been zero in every frame taken from a
-# charger in that mode, which is not the same as being unused -- elsewhere in
-# the block at least one setting moves two bytes at once, the shared C6+A limit
-# at parameter bytes 10 and 34. What the other presets keep there has not been
-# watched closely enough to say.
+# What those bytes hold, read off an X783 by changing controls in the app and
+# taking the frame back. For `priority` and `dc_turbo` one control changed per
+# frame; the two `custom` frames differ in two sliders, C5 and C6+A.
+#
+#   `priority`    byte 0 is a bitmask of the priority ports: C2 alone reads 2,
+#                 C3 alone reads 4, and C1 with C3 reads 5. A mask and not an
+#                 index, then, and C1 is 1 -- though that is what the 5 leaves
+#                 rather than something read on its own. The app allows up to
+#                 three ports.
+#   `dc_turbo`    byte 0 is the DC port voltage -- 1 is 12 V, 2 is 15 V, 3 is
+#                 20 V -- and byte 1 is its Always On switch, 0 or 1. The two
+#                 move independently.
+#   `custom`      carries values right up to the block's last byte: a limit
+#                 for each of C1..C5, a protocol mask per group, and the shared
+#                 C6+A setting at parameter byte 10, which reads 1 at 15 W and
+#                 2 at 30 W. The app's C6+A slider stops only at 0, 15 and
+#                 30 W, so that fits 15 W steps and an index into those three
+#                 stops alike, and nothing the app can set tells them apart.
+#                 Changing a limit in the app can change that group's
+#                 protocols too -- seen on C6+A and on C5 as each slider moved.
+#
+# `adaptive_power` has been zero in every frame read in that mode, which is not
+# the same as being unused. `thermal_safe` has not been read at all. Nothing
+# here interprets any of this -- the block is copied, not decoded -- but it is
+# what the bytes are, and the next person to want a control over them should
+# not have to measure it twice.
 #
 # The copy is only as fresh as the state timer. A setting changed in the app
 # and that mode re-selected from here inside the same minute replays the older
