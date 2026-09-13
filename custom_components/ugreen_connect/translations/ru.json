@@ -70,6 +70,9 @@
       },
       "session_charge": {
         "name": "{port}: заряд за сеанс"
+      },
+      "custom_limit": {
+        "name": "{port} лимит настраиваемого режима"
       }
     },
     "number": {

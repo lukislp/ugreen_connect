@@ -294,3 +294,50 @@ async def test_selecting_a_mode_tells_the_client_which_charger_it_is(hass, start
         blocking=True,
     )
     assert rtcx.mode_writes == [(IOT_ID, 1, "X783")]
+
+
+CUSTOM_GROUPS = ("C1", "C2", "C3", "C4", "C5", "C6+A")
+
+
+async def test_every_custom_group_gets_its_own_sensor(hass, started):
+    """Six groups, six entities, six values -- and six distinct ids.
+
+    Nothing reached these before: the fixture had no custom block, so the class
+    was never instantiated by any test in either suite. Giving them all the
+    same unique id, or making them always available, both stayed green.
+    """
+    registry = er.async_get(hass)
+    reading = started.runtime_data.data["power"][DEVICE_CODE]
+    limits = {group["port"]: group["limit"] for group in reading["custom"]}
+
+    seen = set()
+    for group in CUSTOM_GROUPS:
+        entity_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{DEVICE_CODE}_{group}_custom_limit"
+        )
+        assert entity_id is not None, f"no sensor for {group}"
+        seen.add(entity_id)
+        assert hass.states.get(entity_id).state == str(limits[group])
+
+    assert len(seen) == len(CUSTOM_GROUPS), "the six share an id"
+
+
+async def test_leaving_custom_mode_takes_its_sensors_with_it(hass, started, rtcx):
+    """Under a preset the block is that preset's own settings, not a layout.
+
+    So the parser returns nothing and these have nothing to say. Unavailable
+    rather than holding the last configuration, which would describe a mode the
+    charger is no longer in.
+    """
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "sensor", DOMAIN, f"{DEVICE_CODE}_C3_custom_limit"
+    )
+    assert hass.states.get(entity_id).state == "30"
+
+    rtcx.state = {**rtcx.state, "charging_mode": "priority", "custom": None}
+    rtcx.stale = True          # as a write would, so the cached copy is re-read
+    await started.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
+

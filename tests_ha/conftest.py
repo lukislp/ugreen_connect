@@ -55,6 +55,17 @@ STATE: dict[str, Any] = {
     "screensaver_theme": 1,
     "screensaver_flag": 0,
     "wallpaper": "31F207",
+    # The charging mode is `custom` here, so the parameter block decodes and
+    # the six group sensors exist. Under a preset they do not -- which is what
+    # `test_leaving_custom_mode_takes_its_sensors_with_it` drives.
+    "custom": [
+        {"port": "C1", "limit": 60, "mask": 0xFD, "protocols": ["Apple5V/2.4A"]},
+        {"port": "C2", "limit": 140, "mask": 0xFD, "protocols": ["Apple5V/2.4A"]},
+        {"port": "C3", "limit": 30, "mask": 0x25, "protocols": ["AFC"]},
+        {"port": "C4", "limit": 20, "mask": 0x0D, "protocols": ["AFC"]},
+        {"port": "C5", "limit": 15, "mask": 0x01, "protocols": ["Apple5V/2.4A"]},
+        {"port": "C6+A", "limit": 30, "mask": 0x25, "protocols": ["AFC"]},
+    ],
     "wallpapers": ["31F207"],
 }
 
@@ -114,6 +125,12 @@ class FakeRtcx:
 
     def __init__(self) -> None:
         self.power_answers = True
+        # Mutable, so a test can put the charger into another mode. `stale`
+        # is the same lever a write pulls on the real client: the coordinator
+        # holds the screen settings for a minute, so without it a changed
+        # state is simply not re-read.
+        self.state: dict[str, Any] = dict(STATE)
+        self.stale = False
         self.last_frames: dict[str, dict[str, str]] = {}
         # What the real client learns from a state reply and the coordinator
         # writes down; a test moves it to say the charger was seen in a mode.
@@ -127,7 +144,7 @@ class FakeRtcx:
         return _reading(model) if self.power_answers else None
 
     async def async_device_state(self, _iot_id: str, _model: str | None = None) -> dict[str, Any]:
-        return dict(STATE)
+        return dict(self.state)
 
     async def async_set_charging_mode(
         self, iot_id: str, mode: int, model: str | None = None
@@ -141,10 +158,10 @@ class FakeRtcx:
         return dict(self.mode_params)
 
     def state_is_stale(self, _iot_id: str) -> bool:
-        return False
+        return self.stale
 
     def state_was_read(self, _iot_id: str) -> None:
-        return None
+        self.stale = False
 
     async def async_firmware_version(self, _iot_id: str) -> str:
         return "1.2.1"

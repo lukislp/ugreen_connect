@@ -326,8 +326,11 @@ fine.
 - **Cloud polling only**, five seconds apart by default — see *Settings* above.
 - Logging in from the app with the same account can invalidate the integration's
   token. It re-authenticates on rejection, so this is self-healing.
-- Per-port switching (`SET_PORT_CONTROL`) and the `custom` charging-mode editor
-  are decoded but not exposed. `FACTORY_RESET` is deliberately left out.
+- Per-port switching (`SET_PORT_CONTROL`) is decoded but not exposed. The
+  `custom` charging mode is read and shown -- one sensor per port group, while
+  that mode is the one running -- but not writable: nobody has written that
+  block to a charger, and the table that decides what may be set says so.
+  `FACTORY_RESET` is deliberately left out.
 - Settings changed from the phone app show up here on the next poll, wallpapers
   included: a picture uploaded there is named and previewed within a minute,
   because an id the library cannot account for sends the integration to read it
