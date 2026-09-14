@@ -277,9 +277,9 @@ def test_the_custom_mode_byte_is_the_one_the_mode_table_names():
     Three test loaders compile that module, and one builds a package without
     `const` in it, so `from .const import CHARGING_MODES` cannot go there. The
     value is repeated instead, and only one direction of that was covered: the
-    frames pin `protocol`'s side, so changing the literal breaks six to eight
-    tests depending on the value, while renumbering `CHARGING_MODES` broke
-    none. This is the other direction.
+    frames pin `protocol`'s side, so changing the literal fails tests whatever
+    value it is changed to, while renumbering `CHARGING_MODES` broke none. This
+    is the other direction.
     """
     assert const.CHARGING_MODES[p.CUSTOM_MODE] == "custom"
     assert "custom" not in const.SELECTABLE_MODES, "read-only, so never offered"
@@ -297,8 +297,8 @@ def test_a_preset_has_no_custom_mode_to_describe():
 
     # The same body with something in the block, still a preset: also nothing.
     body = bytearray(60)
-    body[p.STATE_MODE] = 3
-    body[p.STATE_CUSTOM] = 0x02
+    body[4] = 3
+    body[5] = 0x02
     assert p.parse_custom_mode(bytes(body), "X783") is None
 
 
@@ -331,7 +331,7 @@ def test_a_preset_is_not_read_as_a_custom_configuration():
 
     # And the same bytes with custom active still decode, so the gate is the
     # mode and not the zeroing.
-    body[4] = p.CUSTOM_MODE
+    body[4] = 4
     assert p.parse_custom_mode(bytes(body), "X783") is not None
 
 
@@ -385,7 +385,7 @@ def test_a_frame_that_stops_inside_the_block_is_not_decoded():
     """
     def block(length: int) -> bytes:
         body = bytearray(length)
-        body[p.STATE_MODE] = p.CUSTOM_MODE
+        body[4] = 4
         body[5:16] = bytes([0, 60, 0, 140, 0, 30, 0, 20, 0, 30, 1])
         return bytes(body)
 
