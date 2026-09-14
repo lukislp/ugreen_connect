@@ -318,3 +318,31 @@ def test_a_mode_the_charger_refuses_is_warned_about_every_time(caplog):
     caplog.clear()
     c.set_mode(2)
     assert "has not been seen running" not in caplog.text
+
+
+def test_a_custom_mode_reaches_the_reading():
+    """The wire between the decode and the entities, which nothing ran.
+
+    `tests/test_protocol.py` covers the decode and `tests_ha` covers the
+    sensors, and both passed while the line joining them was absent: the
+    integration tests replace the whole client and hand the coordinator a
+    state dict that already contains "custom", so `async_device_state` never
+    runs. Cutting `parse_custom_mode` out of it left every test in both suites
+    green while the six sensors quietly stopped existing. This is the one that
+    goes red for it.
+
+    Built rather than captured, because what is under test is the wiring and
+    not the layout -- the layout has real frames of its own, two files over.
+    """
+    body = bytearray(86)
+    body[rtcx_module.STATE_CHARGING_MODE] = 4
+    body[5:16] = bytes([0, 60, 0, 140, 0, 30, 0, 20, 0, 30, 1])
+    for index, mask in enumerate((0xFD, 0xFD, 0x25, 0x0D, 0x25, 0x01)):
+        body[16 + 4 * index : 20 + 4 * index] = mask.to_bytes(4, "big")
+    body[43:49] = b"ABCDEF"
+
+    frame = rtcx_module.build_frame(rtcx_module.FRAME_QUERY, 1, bytes(body))
+    groups = _Client({IOT: frame}).read()["custom"]
+
+    assert [g["port"] for g in groups] == ["C1", "C2", "C3", "C4", "C5", "C6+A"]
+    assert [g["limit"] for g in groups] == [60, 140, 30, 20, 30, 15]

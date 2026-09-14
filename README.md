@@ -57,6 +57,7 @@ e.g. `sensor.ugreen_nexode_pro_x783_c1_power`.
 | `sensor.<device>_c1_session_charge` | the same session read as milliamp-hours into a battery |
 | `sensor.<device>_total_power` | sum across ports; firmware and Wi-Fi SSID in its attributes |
 | `sensor.<device>_cloud_status` | `online` / `offline`; MAC in its attributes |
+| `sensor.<device>_c1_custom_mode_limit` … | six of them -- C1–C5 and C6+A, which share one -- reading the watt limit that group is set to. Diagnostic; created the first time the charger is seen in the `custom` charging mode, and unavailable while any other one runs. The protocols the group may negotiate and the raw mask are attributes |
 | `update.<device>_firmware` | installed version, and whether one is waiting |
 
 ### Controls
@@ -327,8 +328,15 @@ fine.
 - **Cloud polling only**, five seconds apart by default — see *Settings* above.
 - Logging in from the app with the same account can invalidate the integration's
   token. It re-authenticates on rejection, so this is self-healing.
-- Per-port switching (`SET_PORT_CONTROL`) and the `custom` charging-mode editor
-  are decoded but not exposed. `FACTORY_RESET` is deliberately left out.
+- Per-port switching (`SET_PORT_CONTROL`) is decoded but not exposed. The
+  `custom` charging mode is read and shown -- one sensor per port group,
+  created the first time the charger is seen in that mode and unavailable
+  while any other one runs -- but not writable: nothing here writes this
+  block. Replaying it whole is safe, and the charger accepts a one-field edit,
+  but the app can change a group's protocol mask along with its limit, and
+  which mask goes with which limit is not mapped, so setting one limit on its
+  own could leave a pair the app never sends.
+  `FACTORY_RESET` is deliberately left out.
 - Settings changed from the phone app show up here on the next poll, wallpapers
   included: a picture uploaded there is named and previewed within a minute,
   because an id the library cannot account for sends the integration to read it

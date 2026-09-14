@@ -45,7 +45,7 @@ _package = importlib.util.module_from_spec(
 _package.__path__ = []
 sys.modules[_PKG] = _package
 
-_load(f"{_PKG}.const", "const.py")
+const = _load(f"{_PKG}.const", "const.py")
 # ``protocol`` is free of Home Assistant and of third-party imports alike, so it
 # loads unconditionally -- inside the stand-in package, because ``rtcx`` reaches
 # it as ``.protocol`` and two copies of it under different names would let a test

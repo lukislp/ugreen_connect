@@ -47,14 +47,56 @@ PRODUCT: dict[str, Any] = {
     "productKey": "a-product-key",
 }
 
+# 0xFD is every box the app offers, ticked at once -- bit 1 is the one it has
+# nothing to put in.
+ALL_PROTOCOLS = [
+    "Apple5V/2.4A",
+    "AFC",
+    "SCP",
+    "UFCS",
+    "5-11V PPS",
+    "5-21V PPS",
+    "AVS",
+]
+
 STATE: dict[str, Any] = {
     "brightness": 100,
     "sleep_time": 0,
-    "charging_mode": "adaptive_power",
+    "charging_mode": "custom",
     "screensaver": True,
     "screensaver_theme": 1,
     "screensaver_flag": 0,
     "wallpaper": "31F207",
+    # The charging mode is `custom` here, so the parameter block decodes and
+    # the six group sensors are created. Switching away leaves them in place
+    # and unavailable, which is what
+    # `test_leaving_custom_mode_makes_its_sensors_unavailable` drives.
+    # The names are what parse_custom_mode reads out of the mask beside them,
+    # spelled out rather than derived, so a fixture that drifts from the real
+    # decoder is visible here. Nothing asserts on them today.
+    "custom": [
+        {"port": "C1", "limit": 60, "mask": 0xFD, "protocols": ALL_PROTOCOLS},
+        {"port": "C2", "limit": 140, "mask": 0xFD, "protocols": ALL_PROTOCOLS},
+        {
+            "port": "C3",
+            "limit": 30,
+            "mask": 0x25,
+            "protocols": ["Apple5V/2.4A", "AFC", "5-11V PPS"],
+        },
+        {
+            "port": "C4",
+            "limit": 20,
+            "mask": 0x0D,
+            "protocols": ["Apple5V/2.4A", "AFC", "SCP"],
+        },
+        {"port": "C5", "limit": 15, "mask": 0x01, "protocols": ["Apple5V/2.4A"]},
+        {
+            "port": "C6+A",
+            "limit": 30,
+            "mask": 0x25,
+            "protocols": ["Apple5V/2.4A", "AFC", "5-11V PPS"],
+        },
+    ],
     "wallpapers": ["31F207"],
 }
 
@@ -114,6 +156,12 @@ class FakeRtcx:
 
     def __init__(self) -> None:
         self.power_answers = True
+        # Mutable, so a test can put the charger into another mode. `stale`
+        # is the same lever a write pulls on the real client: the coordinator
+        # holds the screen settings for a minute, so without it a changed
+        # state is simply not re-read.
+        self.state: dict[str, Any] = dict(STATE)
+        self.stale = False
         self.last_frames: dict[str, dict[str, str]] = {}
         # What the real client learns from a state reply and the coordinator
         # writes down; a test moves it to say the charger was seen in a mode.
@@ -127,7 +175,7 @@ class FakeRtcx:
         return _reading(model) if self.power_answers else None
 
     async def async_device_state(self, _iot_id: str, _model: str | None = None) -> dict[str, Any]:
-        return dict(STATE)
+        return dict(self.state)
 
     async def async_set_charging_mode(
         self, iot_id: str, mode: int, model: str | None = None
@@ -141,10 +189,10 @@ class FakeRtcx:
         return dict(self.mode_params)
 
     def state_is_stale(self, _iot_id: str) -> bool:
-        return False
+        return self.stale
 
     def state_was_read(self, _iot_id: str) -> None:
-        return None
+        self.stale = False
 
     async def async_firmware_version(self, _iot_id: str) -> str:
         return "1.2.1"
