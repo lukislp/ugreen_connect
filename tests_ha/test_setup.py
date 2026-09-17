@@ -427,3 +427,50 @@ async def test_leaving_custom_mode_makes_its_sensors_unavailable(hass, started, 
 
     assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
 
+
+
+@pytest.mark.parametrize(
+    "carrying", [False, True], ids=["after_a_fresh_poll", "while_already_carried"]
+)
+async def test_a_missed_poll_after_a_confirmed_write_keeps_the_new_value(
+    hass, started, rtcx, carrying
+):
+    """What a read-back confirmed has to survive the next reply going missing.
+
+    A missed reply is ordinary, and what is carried across it is the retained
+    reading, not the one on screen. If only the one on screen took the
+    read-back, the first miss after a write would put the control back to its
+    value from before the write, and the next good poll would move it forward
+    again. The second case writes while a reading is already being carried,
+    which is the one dropping the copy alone does not cover.
+    """
+    coordinator = started.runtime_data
+    rtcx.state = {**rtcx.state, "charging_mode": "priority", "custom": None}
+    rtcx.stale = True
+    await coordinator.async_refresh()
+    if carrying:
+        rtcx.power_answers = False
+        await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(CHARGING_MODE_SELECT).state == "priority"
+
+    write = rtcx.async_set_charging_mode
+
+    async def taken(iot_id, mode, model=None):
+        await write(iot_id, mode, model)
+        rtcx.state = {**rtcx.state, "charging_mode": "dc_turbo"}
+        rtcx.stale = True
+
+    rtcx.async_set_charging_mode = taken
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": CHARGING_MODE_SELECT, "option": "dc_turbo"},
+        blocking=True,
+    )
+    assert hass.states.get(CHARGING_MODE_SELECT).state == "dc_turbo"
+
+    rtcx.power_answers = False
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(CHARGING_MODE_SELECT).state == "dc_turbo"
